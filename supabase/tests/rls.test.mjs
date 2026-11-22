@@ -48,9 +48,34 @@ ok(p[0].role === 'ceo' && p[0].active, 'primeiro usuário vira CEO')
 ok(p[1].role === 'designer', 'convidado recebe cargo do app_metadata')
 ok(p[3].role === null && !p[3].active, 'user_metadata não concede cargo (sem auto-promoção)')
 
+let currentUid = null
+let currentRole = null
+
 const as = async (uid, fn) => {
-  await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${uid}',false);`)
-  try { return await fn() } finally { await db.exec(`reset role; select set_config('request.jwt.claim.sub','',false);`) }
+  const prevUid = currentUid
+  const prevRole = currentRole
+  currentUid = uid
+  currentRole = uid ? 'authenticated' : (uid === null ? 'anon' : null)
+  if (currentRole === 'authenticated') {
+    await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${uid}',false);`)
+  } else if (currentRole === 'anon') {
+    await db.exec(`set role anon; select set_config('request.jwt.claim.sub','',false);`)
+  } else {
+    await db.exec(`reset role; select set_config('request.jwt.claim.sub','',false);`)
+  }
+  try {
+    return await fn()
+  } finally {
+    currentUid = prevUid
+    currentRole = prevRole
+    if (prevRole === 'authenticated') {
+      await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${prevUid}',false);`)
+    } else if (prevRole === 'anon') {
+      await db.exec(`set role anon; select set_config('request.jwt.claim.sub','',false);`)
+    } else {
+      await db.exec(`reset role; select set_config('request.jwt.claim.sub','',false);`)
+    }
+  }
 }
 // Cenário de teste: dados de catálogo e templates para validação de RLS e ativação
 await db.exec(`
@@ -178,10 +203,22 @@ await as(U.ceo, async () => {
   })
 })
 
-// 2. Proteção de integridade contratual e histórico financeiro
+// 2. Proteção de integridade contratual e ciclo de vida
 await as(U.ceo, async () => {
   const cId = (await q(`insert into clients (name) values ('Cliente Contrato') returning id`)).rows[0].id
-  const kId = (await q(`insert into contracts (client_id, status) values ($1, 'ativo') returning id`, [cId])).rows[0].id
+
+  // a) INSERT de contrato já como ativo deve falhar (exclusivo para rascunho)
+  let errInsert = null
+  try { await q(`insert into contracts (client_id, status) values ($1, 'ativo')`, [cId]) } catch (e) { errInsert = e.message }
+  ok(!!errInsert, 'PoC 2: insert de contrato já como ativo é bloqueado')
+
+  // b) Contrato criado em rascunho e ativado via activate_contract
+  const kId = (await q(`insert into contracts (client_id, status) values ($1, 'rascunho') returning id`, [cId])).rows[0].id
+  const smItem = (await q(`select s.id sid, o.id oid from services s join service_offers o on o.service_id=s.id where s.code='sm'`)).rows[0]
+  await q(`insert into contract_items (contract_id, service_id, offer_id, negotiated_price, billing_type) values ($1,$2,$3,1400,'recorrente')`, [kId, smItem.sid, smItem.oid])
+  await q(`select activate_contract($1, $2)`, [kId, U.des])
+  ok((await q(`select status from contracts where id=$1`, [kId])).rows[0].status === 'ativo', 'PoC 2: contrato ativado corretamente via activate_contract')
+
   await q(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 500, 'pago')`, [kId])
 
   let err = null
@@ -196,12 +233,26 @@ await as(U.ceo, async () => {
   ok(!!err, 'PoC 2: contrato com pagamentos não pode ser excluído (ON DELETE RESTRICT)')
   ok(await count(`select count(*) n from payments where contract_id='${kDraftWithPay}'`) === 1, 'PoC 2: pagamentos continuam protegidos')
 
-  // Tentativa de ativar sem chamar activate_contract
+  // c) Tentativa de ativar sem chamar activate_contract
   const kDraft = (await q(`insert into contracts (client_id, status) values ($1, 'rascunho') returning id`, [cId])).rows[0].id
   await as(U.fin, async () => {
     let err2 = null
     try { await q(`update contracts set status='ativo' where id=$1`, [kDraft]) } catch (e) { err2 = e.message }
     ok(!!err2, 'PoC 2: não ativa contrato diretamente com update status=ativo')
+  })
+
+  // d) Cancelado -> Ativo não é permitido diretamente
+  await q(`update contracts set status='cancelado' where id=$1`, [kDraft])
+  let errCancel = null
+  try { await q(`update contracts set status='ativo' where id=$1`, [kDraft]) } catch (e) { errCancel = e.message }
+  ok(!!errCancel, 'PoC 2: contrato cancelado não pode ser reativado diretamente')
+
+  // e) Usuário com Contratos mas SEM Financeiro não cancela contrato ativo nem altera termos
+  await q(`insert into user_permissions (user_id, module, scope, can_write) values ($1, 'contratos', 'all', true) on conflict do nothing`, [U.des])
+  await as(U.des, async () => {
+    let errNoFin = null
+    try { await q(`update contracts set status='cancelado' where id=$1`, [kId]) } catch (e) { errNoFin = e.message }
+    ok(!!errNoFin, 'PoC 2: usuário com contratos e sem financeiro não cancela contrato ativo')
   })
 })
 
@@ -220,9 +271,77 @@ await as(U.novo, async () => {
   ok(!!err, 'PoC 3: usuário inativo não insere comentários')
 })
 
-// 4. Proteção contra desativação do último admin
+// 4. Proteção contra desativação e lockout do último admin
 await as(U.ceo, async () => {
   let err = null
   try { await q(`update profiles set active=false where id=$1`, [U.ceo]) } catch (e) { err = e.message }
   ok(!!err, 'PoC 4: bloqueia desativar o único administrador ativo do sistema')
+
+  let errNull = null
+  try { await q(`update profiles set role=null where id=$1`, [U.ceo]) } catch (e) { errNull = e.message }
+  ok(!!errNull, 'PoC 4: bloqueia definir role=null no único administrador ativo')
+
+  let errRole = null
+  try { await q(`delete from role_permissions where role='ceo' and module='configuracoes'`) } catch (e) { errRole = e.message }
+  ok(!!errRole, 'PoC 4: bloqueia excluir permissões de configurações do cargo ceo')
+})
+
+// 5. Anon / Público não consegue executar funções de banco
+await as(null, async () => {
+  let errAnon = null
+  try { await q(`select is_admin()`) } catch (e) { errAnon = e.message }
+  ok(!!errAnon, 'PoC 5: anon não executa funções no schema public (is_admin)')
+
+  let errPerm = null
+  try { await q(`select * from my_permissions()`) } catch (e) { errPerm = e.message }
+  ok(!!errPerm, 'PoC 5: anon não executa my_permissions()')
+  ok(/permission denied/i.test(errAnon ?? ''), 'PoC 5: o bloqueio do anon é por falta de permissão (não por outro erro)')
+})
+
+// 6. Contrato firmado: cliente, lead, dados de ativação e condições são protegidos
+U.ven = '00000000-0000-0000-0000-000000000005'
+await db.exec(`insert into roles (key,name) values ('vendas','Vendas');
+update role_permissions set scope='all', can_write=true, can_delete=true where role='vendas' and module='contratos';`)
+await q(`insert into auth.users (id,email,raw_app_meta_data) values ($1,'ven@x.com','{"role":"vendas"}')`, [U.ven])
+const ativo = (await q(`select id from contracts where status='ativo' limit 1`)).rows[0].id
+const outroCli = (await q(`insert into clients (name) values ('Outro cliente') returning id`)).rows[0].id
+
+await as(U.ven, async () => {
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  ok(!!await tenta(`update contracts set client_id=$1 where id=$2`, [outroCli, ativo]), 'PoC 6: não troca o cliente de contrato ativo')
+  ok(!!await tenta(`update contracts set installments=12 where id=$1`, [ativo]), 'PoC 6: sem financeiro não altera parcelas de contrato ativo')
+  ok(!!await tenta(`update contracts set payment_terms='x' where id=$1`, [ativo]), 'PoC 6: sem financeiro não altera condições de pagamento')
+  ok(!!await tenta(`update contracts set renewal='manual' where id=$1`, [ativo]), 'PoC 6: sem financeiro não altera renovação')
+  ok(!!await tenta(`update contracts set activated_by=$1 where id=$2`, [U.ven, ativo]), 'PoC 6: não forja quem ativou o contrato')
+  ok(!!await tenta(`insert into contracts (client_id, activated_at) values ($1, now())`, [outroCli]), 'PoC 6: não cria rascunho com data de ativação forjada')
+  ok(!await tenta(`update contracts set notes='obs' where id=$1`, [ativo]), 'PoC 6: observações continuam editáveis por quem tem Contratos')
+})
+await as(U.ceo, async () => {
+  let err = null
+  try { await q(`update contracts set activated_at=now() - interval '1 year' where id=$1`, [ativo]) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 6: nem o admin forja a data de ativação')
+  err = null
+  try { await q(`update contracts set installments=3 where id=$1`, [ativo]) } catch (e) { err = e.message }
+  ok(!err, 'PoC 6: quem tem Financeiro altera as condições do contrato ativo')
+})
+
+// 7. Sempre resta um administrador efetivo, mesmo com 2 CEOs e ajustes por pessoa
+U.ceo2 = '00000000-0000-0000-0000-000000000006'
+await q(`insert into auth.users (id,email,raw_app_meta_data) values ($1,'ceo2@x.com','{"role":"ceo"}')`, [U.ceo2])
+await as(U.ceo, async () => {
+  const restringe = (uid) => q(`insert into user_permissions (user_id,module,scope,can_write) values ($1,'configuracoes','none',false)
+    on conflict (user_id,module) do update set scope='none', can_write=false`, [uid])
+  let err = null
+  try { await restringe(U.ceo2) } catch (e) { err = e.message }
+  ok(!err, 'PoC 7: com outro admin ativo, é possível restringir o segundo CEO')
+  err = null
+  try { await restringe(U.ceo) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 7: o último admin efetivo não se restringe (2 CEOs, um já restringido)')
+  err = null
+  try { await q(`update profiles set active=false where id=$1`, [U.ceo]) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 7: o último admin efetivo não é desativado, mesmo havendo outro CEO restringido')
+  await q(`delete from user_permissions where user_id=$1 and module='configuracoes'`, [U.ceo2])
+  err = null
+  try { await q(`update profiles set active=false where id=$1`, [U.ceo2]) } catch (e) { err = e.message }
+  ok(!err, 'PoC 7: com dois admins efetivos, um deles pode ser desativado')
 })
