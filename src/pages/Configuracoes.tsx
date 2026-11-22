@@ -7,7 +7,7 @@ import type { BillingType, OptionRow, RolePermission, RoleRow, Service, ServiceO
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { Empty, Field, fdt, Loading, money, nn, num, PageHead, Select, Tabs } from '../ui/kit'
+import { Empty, Field, fdt, Loading, maskInteger, maskMoney, money, nn, num, parseMoney, PageHead, Select, Tabs } from '../ui/kit'
 import { EquipeTab } from './EquipeTab'
 import { Pagination } from '../ui/Pagination'
 import { useQuery } from '@tanstack/react-query'
@@ -270,13 +270,17 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
     if (!service || !newOffer.label.trim()) return
     const ok = await run(async () => {
       const o = await db.insert('service_offers', { service_id: service.id, label: newOffer.label.trim(), quantity: num(newOffer.quantity), sort: (offers.data?.length ?? 0) + 1 })
-      if (canPrice && newOffer.price !== '') await db.upsert('offer_prices', { offer_id: o.id, price: Number(newOffer.price) }, 'offer_id')
+      if (canPrice && newOffer.price !== '') await db.upsert('offer_prices', { offer_id: o.id, price: parseMoney(newOffer.price) ?? 0 }, 'offer_id')
     }, 'Opção adicionada')
     if (ok) setNewOffer({ label: '', quantity: '', price: '' })
   }
   const updOffer = (o: ServiceOffer, patch: Partial<ServiceOffer>) => run(() => db.update('service_offers', { id: o.id }, patch))
-  const setPrice = (o: ServiceOffer, v: string) => v !== '' && Number(v) !== priceOf(o.id) &&
-    run(() => db.upsert('offer_prices', { offer_id: o.id, price: Number(v) }, 'offer_id'), 'Preço atualizado')
+  const setPrice = (o: ServiceOffer, v: string) => {
+    const p = parseMoney(v)
+    if (p != null && p !== priceOf(o.id)) {
+      run(() => db.upsert('offer_prices', { offer_id: o.id, price: p }, 'offer_id'), 'Preço atualizado')
+    }
+  }
   async function removeOffer(o: ServiceOffer) {
     if (!(await confirm(`Remover a opção "${o.label}"? Se já estiver em contratos, desative em vez de remover.`, { danger: true, confirmLabel: 'Remover' }))) return
     await run(() => db.remove('service_offers', { id: o.id }), 'Opção removida')
@@ -291,8 +295,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
           <Field label="Categoria"><input value={f.category} onChange={set('category')} placeholder="Ex.: Audiovisual" /></Field>
           <Field label="Descrição comercial" full><input value={f.description} onChange={set('description')} placeholder="Resumo comercial do serviço" /></Field>
           <Field label="Tipo de cobrança"><Select value={f.billing_type} onChange={set('billing_type')} options={[{ value: 'recorrente', label: 'Recorrente' }, { value: 'pacote', label: 'Pacote' }, { value: 'avulso', label: 'Avulso' }]} /></Field>
-          <Field label="Contrato mínimo (meses)"><input type="number" min="0" value={f.min_months} onChange={set('min_months')} placeholder="Ex.: 6" /></Field>
-          <Field label="Prazo de execução (dias)"><input type="number" min="0" value={f.delivery_days} onChange={set('delivery_days')} placeholder="Ex.: 2" /></Field>
+          <Field label="Contrato mínimo (meses)"><input type="text" inputMode="numeric" value={f.min_months} onChange={(e) => setF({ ...f, min_months: maskInteger(e.target.value) })} placeholder="Ex.: 6" /></Field>
+          <Field label="Prazo de execução (dias)"><input type="text" inputMode="numeric" value={f.delivery_days} onChange={(e) => setF({ ...f, delivery_days: maskInteger(e.target.value) })} placeholder="Ex.: 2" /></Field>
           <Field label="Observação do prazo"><input value={f.delivery_note} onChange={set('delivery_note')} placeholder="Ex.: até 48h após a captação" /></Field>
           <Field label="Entregáveis (um por linha)" full><textarea rows={6} value={f.deliverables} onChange={set('deliverables')} placeholder="Um entregável por linha" /></Field>
           <Field label="Condições e observações internas" full><textarea value={f.notes} onChange={set('notes')} placeholder="Condições comerciais e observações internas" /></Field>
@@ -310,8 +314,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
                 {(offers.data ?? []).map((o) => (
                   <tr key={o.id}>
                     <td><input defaultValue={o.label} disabled={!canEdit} onBlur={(e) => e.target.value.trim() && e.target.value !== o.label && updOffer(o, { label: e.target.value.trim() })} aria-label="Nome da opção" /></td>
-                    <td><input type="number" style={{ width: 72 }} defaultValue={o.quantity ?? ''} disabled={!canEdit} onBlur={(e) => num(e.target.value) !== o.quantity && updOffer(o, { quantity: num(e.target.value) })} aria-label="Quantidade" /></td>
-                    {can('financeiro') && <td><input type="number" min="0" step="0.01" style={{ width: 112 }} key={priceOf(o.id)} defaultValue={priceOf(o.id) ?? ''} disabled={!canPrice} onBlur={(e) => setPrice(o, e.target.value)} aria-label="Preço" /></td>}
+                    <td><input type="text" inputMode="numeric" style={{ width: 72 }} defaultValue={o.quantity ?? ''} disabled={!canEdit} onBlur={(e) => num(maskInteger(e.target.value)) !== o.quantity && updOffer(o, { quantity: num(maskInteger(e.target.value)) })} aria-label="Quantidade" /></td>
+                    {can('financeiro') && <td><input type="text" inputMode="numeric" style={{ width: 112 }} key={priceOf(o.id)} defaultValue={priceOf(o.id) != null ? maskMoney(priceOf(o.id)) : ''} disabled={!canPrice} onBlur={(e) => setPrice(o, e.target.value)} aria-label="Preço" placeholder="0,00" /></td>}
                     <td><input type="checkbox" checked={o.active} disabled={!canEdit} onChange={(e) => updOffer(o, { active: e.target.checked })} aria-label="Ativa" /></td>
                     <td>{canEdit && <button className="btn ghost sm danger" onClick={() => removeOffer(o)}>Remover</button>}</td>
                   </tr>
@@ -322,8 +326,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
           {canEdit && (
             <div className="toolbar" style={{ marginTop: 12, marginBottom: 0 }}>
               <input placeholder="Nova opção (ex.: 3 vídeos)" value={newOffer.label} onChange={(e) => setNewOffer({ ...newOffer, label: e.target.value })} aria-label="Nova opção" />
-              <input type="number" placeholder="Qtd." style={{ width: 80 }} value={newOffer.quantity} onChange={(e) => setNewOffer({ ...newOffer, quantity: e.target.value })} aria-label="Quantidade" />
-              {canPrice && <input type="number" placeholder="Preço" style={{ width: 112 }} value={newOffer.price} onChange={(e) => setNewOffer({ ...newOffer, price: e.target.value })} aria-label="Preço" />}
+              <input type="text" inputMode="numeric" placeholder="Qtd." style={{ width: 80 }} value={newOffer.quantity} onChange={(e) => setNewOffer({ ...newOffer, quantity: maskInteger(e.target.value) })} aria-label="Quantidade" />
+              {canPrice && <input type="text" inputMode="numeric" placeholder="Preço (R$)" style={{ width: 112 }} value={newOffer.price} onChange={(e) => setNewOffer({ ...newOffer, price: maskMoney(e.target.value) })} aria-label="Preço" />}
               <button className="btn" onClick={addOffer} disabled={!newOffer.label.trim()}>Adicionar</button>
             </div>
           )}

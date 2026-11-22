@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- utilitários de formatação junto dos componentes base */
 import type { ReactNode, SelectHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
+export * from './formatters'
 
 // ---------- formatação ----------
 export const today = () => new Date().toLocaleDateString('sv-SE')

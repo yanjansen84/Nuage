@@ -8,7 +8,7 @@ import type { BillingType, Contract, ContractItem } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { addDays, addMonths, Empty, Field, fdFull, Loading, money, nn, num, PageHead, Select, Tag, today } from '../ui/kit'
+import { addDays, addMonths, Empty, Field, fdFull, Loading, maskDay, maskInteger, maskMoney, money, nn, num, parseMoney, PageHead, Select, Tag, today } from '../ui/kit'
 import { CONTRACT_STATUS, contractMonthly, contractOneTime, minEnd, PAY_METHOD } from './contratosUtil'
 
 export default function Contratos() {
@@ -148,8 +148,10 @@ export function ContratoEditor() {
         const keep = new Set(items.filter((i) => i.id).map((i) => i.id))
         for (const old of savedItems.data ?? []) if (!keep.has(old.id)) await db.remove('contract_items', { id: old.id })
         for (const i of items) {
-          const row = { contract_id: cid, service_id: i.service_id, offer_id: i.offer_id, description: i.description,
-            quantity: i.quantity, list_price: i.list_price, negotiated_price: i.negotiated_price, billing_type: i.billing_type }
+          const row = {
+            contract_id: cid, service_id: i.service_id, offer_id: i.offer_id, description: i.description,
+            quantity: i.quantity, list_price: i.list_price, negotiated_price: i.negotiated_price, billing_type: i.billing_type
+          }
           if (i.id) await db.update('contract_items', { id: i.id }, row)
           else await db.insert('contract_items', row)
         }
@@ -255,9 +257,9 @@ export function ContratoEditor() {
                             onChange={(e) => { const lp = priceOf(e.target.value); updItem(i.key, { offer_id: e.target.value || null, list_price: lp, negotiated_price: lp ?? i.negotiated_price }) }}
                             options={offs.map((o) => ({ value: o.id, label: `${o.label}${priceOf(o.id) != null ? ` · ${money(priceOf(o.id))}` : ''}` }))} />
                         </Field>
-                        <Field label="Quantidade"><input type="number" min="1" value={i.quantity} disabled={!itemsEditable} onChange={(e) => updItem(i.key, { quantity: Math.max(1, Number(e.target.value) || 1) })} /></Field>
+                        <Field label="Quantidade"><input type="text" inputMode="numeric" value={i.quantity} disabled={!itemsEditable} onChange={(e) => updItem(i.key, { quantity: Math.max(1, Number(maskInteger(e.target.value)) || 1) })} /></Field>
                         <Field label="Valor negociado (R$)" hint={i.list_price != null && i.list_price !== i.negotiated_price ? `Tabela: ${money(i.list_price)}` : 'Preço de tabela sugerido'}>
-                          <input type="number" min="0" step="0.01" value={i.negotiated_price} disabled={!itemsEditable} onChange={(e) => updItem(i.key, { negotiated_price: Number(e.target.value) || 0 })} />
+                          <input type="text" inputMode="numeric" value={maskMoney(i.negotiated_price)} disabled={!itemsEditable} onChange={(e) => updItem(i.key, { negotiated_price: parseMoney(e.target.value) || 0 })} placeholder="0,00" />
                         </Field>
                         <Field label="Cobrança">
                           <Select value={i.billing_type} disabled={!itemsEditable} onChange={(e) => updItem(i.key, { billing_type: e.target.value as BillingType })}
@@ -289,12 +291,12 @@ export function ContratoEditor() {
             </Field>
             <div className="form-grid">
               <Field label="Início"><input type="date" value={f.start_date} onChange={set('start_date')} /></Field>
-              <Field label="Prazo mínimo (meses)"><input type="number" min="0" value={f.min_months} onChange={set('min_months')} placeholder="Ex.: 6" /></Field>
+              <Field label="Prazo mínimo (meses)"><input type="text" inputMode="numeric" value={f.min_months} onChange={(e) => setF({ ...f, min_months: maskInteger(e.target.value) })} placeholder="Ex.: 6" /></Field>
               <Field label="Renovação"><Select value={f.renewal} onChange={set('renewal')} options={[{ value: 'automatica', label: 'Automática' }, { value: 'manual', label: 'Manual' }]} /></Field>
               <Field label="Aviso prévio"><Select value={f.notice_days} onChange={set('notice_days')} placeholder="A definir" options={[5, 10, 15, 20].map((d) => ({ value: String(d), label: `${d} dias` }))} /></Field>
-              <Field label="Dia de vencimento"><input type="number" min="1" max="31" value={f.due_day} onChange={set('due_day')} placeholder="Ex.: 10" /></Field>
+              <Field label="Dia de vencimento"><input type="text" inputMode="numeric" value={f.due_day} onChange={(e) => setF({ ...f, due_day: maskDay(e.target.value) })} placeholder="Ex.: 10" /></Field>
               <Field label="Pagamento"><Select value={f.payment_method} onChange={set('payment_method')} placeholder="A definir" options={Object.entries(PAY_METHOD).map(([v, l]) => ({ value: v, label: l }))} /></Field>
-              <Field label="Parcelas"><input type="number" min="1" value={f.installments} onChange={set('installments')} placeholder="1" /></Field>
+              <Field label="Parcelas"><input type="text" inputMode="numeric" value={f.installments} onChange={(e) => setF({ ...f, installments: maskInteger(e.target.value) })} placeholder="1" /></Field>
             </div>
             {end && <p className="money-note">Prazo mínimo até {fdFull(end)}{f.renewal === 'automatica' ? ', renova automaticamente se não houver pedido de encerramento' : ''}.</p>}
             <Field label="Condições de pagamento"><input value={f.payment_terms} onChange={set('payment_terms')} placeholder="Ex.: parcelamento via Pix em 2x" /></Field>

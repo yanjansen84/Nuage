@@ -176,7 +176,7 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
       </>}>
       {content?.posted_at && (
         <p className="posted-note"><Check aria-hidden />Postado em {fdt(content.posted_at)}
-          {content.posted_url && <> · <a href={content.posted_url} target="_blank" rel="noopener noreferrer">ver publicação <ExternalLink aria-hidden /></a></>}</p>
+          {content.posted_url && /^https?:\/\//i.test(content.posted_url) && <> · <a href={content.posted_url} target="_blank" rel="noopener noreferrer">ver publicação <ExternalLink aria-hidden /></a></>}</p>
       )}
       <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
         <div className="form-grid">

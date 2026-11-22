@@ -3,6 +3,7 @@ import logoBranco from '../assets/logo-nanu-branco.png'
 import { getRemember, setRemember, supabase } from '../lib/supabase'
 import { IconEye, IconEyeOff, IconLock, IconMail } from '../components/icons'
 import { useAuth } from '../lib/auth'
+import { maskEmail } from '../ui/kit'
 import '../styles/login.css'
 
 const traduz = (m: string) =>
@@ -56,7 +57,7 @@ export default function Login() {
             <IconMail />
             <span className="sr-only">E-mail</span>
             <input type="email" placeholder="E-mail" autoComplete="username" inputMode="email"
-              value={email} onChange={(e) => setEmail(e.target.value)} required />
+              value={email} onChange={(e) => setEmail(maskEmail(e.target.value))} required />
           </label>
           <label className="pill">
             <IconLock />

@@ -8,7 +8,7 @@ import { Comments } from '../components/Comments'
 import { Kanban } from '../components/Kanban'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { Empty, Field, fd, Loading, money, nn, num, PageHead, Seg, Select, Tag, today } from '../ui/kit'
+import { Empty, Field, fd, Loading, maskEmail, maskMoney, maskPhone, money, nn, parseMoney, PageHead, Seg, Select, Tag, today } from '../ui/kit'
 
 export default function Comercial() {
   const { can } = useAuth()
@@ -117,10 +117,10 @@ function LeadForm({ lead, value, onClose }: { lead: Lead | null; value: number |
   const people = usePeople()
   const canEdit = lead ? can('crm', 'write') : true
   const [f, setF] = useState(() => ({
-    name: lead?.name ?? '', company: lead?.company ?? '', phone: lead?.phone ?? '', email: lead?.email ?? '',
+    name: lead?.name ?? '', company: lead?.company ?? '', phone: maskPhone(lead?.phone ?? ''), email: lead?.email ?? '',
     segment: lead?.segment ?? '', origin: lead?.origin ?? 'Indicação', service_id: lead?.service_id ?? '',
     owner_id: lead?.owner_id ?? '', stage_id: lead?.stage_id ?? '', next_action: lead?.next_action ?? '',
-    follow_up: lead?.follow_up ?? '', notes: lead?.notes ?? '', value: value == null ? '' : String(value),
+    follow_up: lead?.follow_up ?? '', notes: lead?.notes ?? '', value: value == null ? '' : maskMoney(value),
   }))
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
   const stageId = f.stage_id || stages.list[0]?.id || ''
@@ -137,8 +137,8 @@ function LeadForm({ lead, value, onClose }: { lead: Lead | null; value: number |
     setBusy(true)
     const ok = await run(async () => {
       const saved = lead ? (await db.update('leads', { id: lead.id }, payload), lead) : await db.insert('leads', payload)
-      if (can('financeiro', 'write') && String(value ?? '') !== f.value)
-        await db.upsert('lead_values', { lead_id: saved.id, estimated_value: num(f.value) }, 'lead_id')
+      if (can('financeiro', 'write') && (value == null ? '' : maskMoney(value)) !== f.value)
+        await db.upsert('lead_values', { lead_id: saved.id, estimated_value: parseMoney(f.value) }, 'lead_id')
       return true
     }, 'Lead salvo')
     setBusy(false)
@@ -183,14 +183,14 @@ function LeadForm({ lead, value, onClose }: { lead: Lead | null; value: number |
         <div className="form-grid">
           <Field label="Nome do contato *"><input value={f.name} onChange={set('name')} placeholder="Nome de quem entrou em contato" autoFocus /></Field>
           <Field label="Empresa"><input value={f.company} onChange={set('company')} placeholder="Nome da empresa" /></Field>
-          <Field label="Telefone / WhatsApp"><input value={f.phone} onChange={set('phone')} placeholder="(00) 00000-0000" inputMode="tel" /></Field>
-          <Field label="E-mail"><input value={f.email} onChange={set('email')} placeholder="contato@empresa.com.br" type="email" /></Field>
+          <Field label="Telefone / WhatsApp"><input value={f.phone} onChange={(e) => setF({ ...f, phone: maskPhone(e.target.value) })} placeholder="(00) 00000-0000" inputMode="tel" maxLength={15} /></Field>
+          <Field label="E-mail"><input value={f.email} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="contato@empresa.com.br" type="email" /></Field>
           <Field label="Segmento"><input value={f.segment} onChange={set('segment')} placeholder="Ex.: Alimentação, Moda, Saúde" /></Field>
           <Field label="Origem"><Select value={f.origin} onChange={set('origin')} options={origins.list.map((o) => ({ value: o.label, label: o.label }))} /></Field>
           <Field label="Serviço de interesse"><Select value={f.service_id} onChange={set('service_id')} placeholder="A definir" options={(services.data ?? []).map((s) => ({ value: s.id, label: s.name }))} /></Field>
           {can('financeiro') && (
             <Field label="Valor estimado (R$)" hint="Visível só para quem acessa o financeiro">
-              <input type="number" min="0" step="0.01" value={f.value} onChange={set('value')} placeholder="0,00" disabled={!can('financeiro', 'write')} />
+              <input type="text" inputMode="numeric" value={f.value} onChange={(e) => setF({ ...f, value: maskMoney(e.target.value) })} placeholder="0,00" disabled={!can('financeiro', 'write')} />
             </Field>
           )}
           <Field label="Responsável comercial"><Select value={f.owner_id} onChange={set('owner_id')} placeholder="Sem responsável" options={people.active.map((p) => ({ value: p.id, label: p.name }))} /></Field>

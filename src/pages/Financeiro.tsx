@@ -8,7 +8,7 @@ import type { Payment } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { addDays, addMonths, Empty, Field, fd, fdFull, Kpi, Loading, money, nn, PageHead, Seg, Select, Tabs, Tag, today } from '../ui/kit'
+import { addDays, addMonths, Empty, Field, fd, fdFull, Kpi, Loading, maskMoney, money, nn, parseMoney, PageHead, Seg, Select, Tabs, Tag, today } from '../ui/kit'
 import { Pagination } from '../ui/Pagination'
 import { contractMonthly, contractOneTime, minEnd, PAY_METHOD, payState } from './contratosUtil'
 
@@ -179,16 +179,16 @@ function PaymentForm({ payment, defaultMonth, onClose }: { payment: Payment | nu
   const clients = useTable('clients')
   const canEdit = can('financeiro', 'write')
   const [f, setF] = useState({
-    contract_id: payment?.contract_id ?? '', due_date: payment?.due_date ?? `${defaultMonth}-10`, amount: payment?.amount?.toString() ?? '',
+    contract_id: payment?.contract_id ?? '', due_date: payment?.due_date ?? `${defaultMonth}-10`, amount: payment?.amount != null ? maskMoney(payment.amount) : '',
     status: payment?.status ?? 'previsto', paid_at: payment?.paid_at ?? '', method: payment?.method ?? '', notes: payment?.notes ?? '',
   })
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
-  const valid = f.contract_id && f.due_date && f.amount !== '' && Number(f.amount) >= 0
+  const valid = f.contract_id && f.due_date && parseMoney(f.amount) != null && (parseMoney(f.amount) ?? 0) >= 0
 
   async function save() {
     if (!valid) return
     const p = {
-      contract_id: f.contract_id, due_date: f.due_date, amount: Number(f.amount), status: f.status as Payment['status'],
+      contract_id: f.contract_id, due_date: f.due_date, amount: parseMoney(f.amount) ?? 0, status: f.status as Payment['status'],
       paid_at: f.status === 'pago' ? (f.paid_at || today()) : null, method: (f.method || null) as Payment['method'], notes: nn(f.notes),
     }
     const ok = await run(async () => { if (payment) await db.update('payments', { id: payment.id }, p); else await db.insert('payments', p) }, 'Lançamento salvo')
@@ -213,7 +213,7 @@ function PaymentForm({ payment, defaultMonth, onClose }: { payment: Payment | nu
         <div className="form-grid">
           <Field label="Contrato *" full><Select value={f.contract_id} onChange={set('contract_id')} placeholder="Selecione" options={options} /></Field>
           <Field label="Vencimento *"><input type="date" value={f.due_date} onChange={set('due_date')} /></Field>
-          <Field label="Valor (R$) *"><input type="number" min="0" step="0.01" value={f.amount} onChange={set('amount')} placeholder="0,00" /></Field>
+          <Field label="Valor (R$) *"><input type="text" inputMode="numeric" value={f.amount} onChange={(e) => setF({ ...f, amount: maskMoney(e.target.value) })} placeholder="0,00" /></Field>
           <Field label="Situação"><Select value={f.status} onChange={set('status')} options={['previsto', 'pago', 'cancelado'].map((s) => ({ value: s, label: PAY_STATUS[s].label }))} /></Field>
           {f.status === 'pago' && <Field label="Pago em"><input type="date" value={f.paid_at || today()} onChange={set('paid_at')} /></Field>}
           <Field label="Método"><Select value={f.method} onChange={set('method')} placeholder="A definir" options={Object.entries(PAY_METHOD).map(([v, l]) => ({ value: v, label: l }))} /></Field>

@@ -47,8 +47,11 @@ Deno.serve(async (req) => {
   if (error) return json({ error: error.message }, 400)
 
   // 4. Cargo em app_metadata + garante o perfil com o cargo certo
-  await admin.auth.admin.updateUserById(data.user.id, { app_metadata: { role } })
-  await admin.from('profiles').update({ role, name, active: true }).eq('id', data.user.id)
+  const { error: appErr } = await admin.auth.admin.updateUserById(data.user.id, { app_metadata: { role } })
+  if (appErr) return json({ error: 'Erro ao registrar cargo do usuário' }, 500)
+
+  const { error: profErr } = await admin.from('profiles').update({ role, name, active: true }).eq('id', data.user.id)
+  if (profErr) return json({ error: 'Erro ao atualizar perfil do usuário' }, 500)
 
   return json({ id: data.user.id })
 })

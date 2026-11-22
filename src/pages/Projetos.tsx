@@ -9,7 +9,7 @@ import { Comments } from '../components/Comments'
 import { Kanban } from '../components/Kanban'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { Empty, Field, fd, Loading, nn, num, PageHead, PRIORITY, Progress, Seg, Select, Tabs, Tag, today } from '../ui/kit'
+import { Empty, Field, fd, Loading, maskDecimal, nn, num, PageHead, PRIORITY, Progress, Seg, Select, Tabs, Tag, today } from '../ui/kit'
 
 type View = 'tarefas' | 'projetos'
 
@@ -237,7 +237,7 @@ export function TaskForm({ task, defaultProject, parent, onClose, onOpen }: {
           <Field label="Projeto"><Select value={f.project_id} onChange={(e) => onProject(e.target.value)} placeholder="Sem projeto" options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.name }))} /></Field>
           {can('clientes') && <Field label="Cliente"><Select value={f.client_id} onChange={set('client_id')} placeholder="Sem cliente" options={(clients.data ?? []).map((c) => ({ value: c.id, label: c.name }))} /></Field>}
           <Field label="Prioridade"><Select value={f.priority} onChange={set('priority')} options={Object.entries(PRIORITY).map(([v, p]) => ({ value: v, label: p.label }))} /></Field>
-          <Field label="Esforço estimado (horas)" hint="Usado no cálculo de carga da equipe"><input type="number" min="0" step="0.5" value={f.effort_hours} onChange={set('effort_hours')} placeholder="Ex.: 4" /></Field>
+          <Field label="Esforço estimado (horas)" hint="Usado no cálculo de carga da equipe"><input type="text" inputMode="decimal" value={f.effort_hours} onChange={(e) => setF({ ...f, effort_hours: maskDecimal(e.target.value) })} placeholder="Ex.: 4" /></Field>
           <Field label="Início"><input type="date" value={f.start_date} onChange={set('start_date')} /></Field>
           <Field label="Prazo"><input type="date" value={f.due_date} onChange={set('due_date')} /></Field>
           <Field label="Repetir" hint="A geração automática das próximas ocorrências entra na Fase 2">

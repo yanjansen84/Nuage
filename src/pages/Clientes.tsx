@@ -8,7 +8,7 @@ import { useAuth } from '../lib/auth'
 import { Comments } from '../components/Comments'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { Empty, Field, fd, fdFull, Loading, money, nn, PageHead, Select, Tabs, Tag, today } from '../ui/kit'
+import { Empty, Field, fd, fdFull, Loading, maskEmail, maskPhone, money, nn, PageHead, Select, Tabs, Tag, today } from '../ui/kit'
 import { contractMonthly, CONTRACT_STATUS } from './contratosUtil'
 
 const PALETTE = ['#5b4bdb', '#0e9aa7', '#d6336c', '#2e9e6a', '#b97d00', '#2f80ed', '#ea5c2a']
@@ -88,8 +88,8 @@ export function ClientForm({ client, onClose, onSaved }: { client: Client | null
         <Field label="Segmento"><input value={f.segment} onChange={set('segment')} placeholder="Ex.: Alimentação, Moda, Saúde" /></Field>
         <Field label="Status"><Select value={statusId} onChange={set('status_id')} options={status.list.map((s) => ({ value: s.id, label: s.label }))} /></Field>
         <Field label="Pessoa de contato"><input value={f.contact_name} onChange={set('contact_name')} placeholder="Quem responde pelo cliente" /></Field>
-        <Field label="Telefone / WhatsApp"><input value={f.phone} onChange={set('phone')} placeholder="(00) 00000-0000" inputMode="tel" /></Field>
-        <Field label="E-mail" full><input type="email" value={f.email} onChange={set('email')} placeholder="contato@empresa.com.br" /></Field>
+        <Field label="Telefone / WhatsApp"><input value={f.phone} onChange={(e) => setF({ ...f, phone: maskPhone(e.target.value) })} placeholder="(00) 00000-0000" inputMode="tel" maxLength={15} /></Field>
+        <Field label="E-mail" full><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="contato@empresa.com.br" /></Field>
         <Field label="Observações" full><textarea value={f.notes} onChange={set('notes')} placeholder="Informações importantes sobre o cliente" /></Field>
       </div>
     </Modal>

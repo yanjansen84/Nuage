@@ -5,7 +5,7 @@ import type { ProfileRow } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
-import { Empty, Field, initials, Loading, nn, num, Select } from '../ui/kit'
+import { Empty, Field, initials, Loading, maskEmail, maskInteger, maskPhone, maskSocial, nn, num, Select } from '../ui/kit'
 
 /** Aba "Equipe e usuários" de Configurações: crachás, contatos, cargo e convite. */
 export function EquipeTab() {
@@ -137,11 +137,11 @@ function PersonModal({ person, roleName, openTasks, onClose }: {
         <div className="form-grid">
           <Field label="Nome *" full><input value={v('name', person.name)} onChange={set('name')} disabled={!isMe && !admin} placeholder="Nome completo" /></Field>
           <Field label="Vínculo"><Select value={v('link', person.link)} onChange={set('link')} disabled={!isMe && !admin} options={['Efetivo', 'Estagiário'].map((x) => ({ value: x, label: x }))} /></Field>
-          {admin && <Field label="Capacidade (h/semana)"><input type="number" min="0" value={v('cap', cap?.toString())} onChange={set('cap')} placeholder="Ex.: 40" /></Field>}
-          <Field label="Telefone"><input value={v('phone', d?.phone)} onChange={set('phone')} inputMode="tel" placeholder="(00) 00000-0000" /></Field>
-          <Field label="E-mail de contato"><input type="email" value={v('email', d?.email)} onChange={set('email')} placeholder="nome@empresa.com.br" /></Field>
-          <Field label="Instagram"><input value={v('insta', d?.insta)} onChange={set('insta')} placeholder="@usuario" /></Field>
-          <Field label="X (Twitter)"><input value={v('x', d?.x)} onChange={set('x')} placeholder="@usuario" /></Field>
+          {admin && <Field label="Capacidade (h/semana)"><input type="text" inputMode="numeric" value={v('cap', cap?.toString())} onChange={(e) => setF({ ...f, cap: maskInteger(e.target.value) })} placeholder="Ex.: 40" /></Field>}
+          <Field label="Telefone"><input value={v('phone', d?.phone)} onChange={(e) => setF({ ...f, phone: maskPhone(e.target.value) })} inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" /></Field>
+          <Field label="E-mail de contato"><input type="email" value={v('email', d?.email)} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="nome@empresa.com.br" /></Field>
+          <Field label="Instagram"><input value={v('insta', d?.insta)} onChange={(e) => setF({ ...f, insta: maskSocial(e.target.value) })} placeholder="@usuario" /></Field>
+          <Field label="X (Twitter)"><input value={v('x', d?.x)} onChange={(e) => setF({ ...f, x: maskSocial(e.target.value) })} placeholder="@usuario" /></Field>
         </div>
       )}
     </Modal>
@@ -162,7 +162,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
       footer={<><button className="btn primary" onClick={send} disabled={!valid}>Enviar convite</button><button className="btn" onClick={onClose}>Cancelar</button></>}>
       <p className="mu" style={{ marginTop: 0 }}>A pessoa recebe um e-mail com o link para criar a senha</p>
       <Field label="Nome *"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus placeholder="Nome completo" /></Field>
-      <Field label="E-mail *"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="nome@empresa.com.br" /></Field>
+      <Field label="E-mail *"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="nome@empresa.com.br" /></Field>
       <Field label="Cargo *"><Select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} placeholder="Selecione o cargo" options={(roles.data ?? []).map((r) => ({ value: r.key, label: r.name }))} /></Field>
     </Modal>
   )

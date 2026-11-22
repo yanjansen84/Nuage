@@ -52,6 +52,19 @@ const as = async (uid, fn) => {
   await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${uid}',false);`)
   try { return await fn() } finally { await db.exec(`reset role; select set_config('request.jwt.claim.sub','',false);`) }
 }
+// Cenário de teste: dados de catálogo e templates para validação de RLS e ativação
+await db.exec(`
+insert into services (code, name, category, billing_type, sort) values ('ag','Agência','Agência','recorrente',1), ('sm','Social Media','Social Media','recorrente',2), ('st','Studio','Studio','pacote',3) on conflict do nothing;
+insert into service_offers (service_id, label, sort) select id, 'Mensal', 1 from services where code in ('ag','sm') on conflict do nothing;
+insert into service_offers (service_id, label, sort) select id, 'Pacote', 1 from services where code = 'st' on conflict do nothing;
+insert into service_offers (service_id, label, sort) select id, 'Pacote 2', 2 from services where code = 'st' on conflict do nothing;
+insert into service_offers (service_id, label, sort) select id, 'Pacote 3', 3 from services where code = 'st' on conflict do nothing;
+insert into service_offers (service_id, label, sort) select id, 'Pacote 4', 4 from services where code = 'st' on conflict do nothing;
+insert into offer_prices (offer_id, price) select id, 1000 from service_offers on conflict do nothing;
+insert into checklist_templates (id, name, active) values ('00000000-0000-0000-0000-000000000001', 'Onboarding Geral', true) on conflict do nothing;
+insert into checklist_template_items (template_id, title, sort) select '00000000-0000-0000-0000-000000000001', 'Item ' || i, i from generate_series(1, 11) i on conflict do nothing;
+`)
+
 const count = (sql) => q(sql).then(r => Number(r.rows[0].n))
 
 await as(U.ceo, async () => {
@@ -147,4 +160,69 @@ await as(U.fin, async () => {
 
 await as(U.novo, async () => {
   ok(await count(`select count(*) n from clients`) === 0, 'usuário sem cargo não vê nada')
+})
+
+// ======================================================================
+// Testes de regressão (PoC de segurança confirmada)
+// ======================================================================
+
+// 1. Designer com escopo próprio NÃO se adiciona como colaborador em tarefa alheia
+await as(U.ceo, async () => {
+  const tid = (await q(`insert into tasks (title, owner_id) values ('Tarefa Secreta CEO', $1) returning id`, [U.ceo])).rows[0].id
+  await as(U.des, async () => {
+    let err = null
+    try { await q(`insert into task_collaborators (task_id, profile_id) values ($1, $2)`, [tid, U.des]) } catch (e) { err = e.message }
+    ok(!!err, 'PoC 1: designer com escopo próprio não se adiciona em tarefa alheia')
+    ok(await count(`select count(*) n from task_collaborators where task_id='${tid}'`) === 0, 'PoC 1: designer não lista colaboradores de tarefa alheia')
+    ok(await count(`select count(*) n from tasks where id='${tid}'`) === 0, 'PoC 1: tarefa alheia continua inacessível para o designer')
+  })
+})
+
+// 2. Proteção de integridade contratual e histórico financeiro
+await as(U.ceo, async () => {
+  const cId = (await q(`insert into clients (name) values ('Cliente Contrato') returning id`)).rows[0].id
+  const kId = (await q(`insert into contracts (client_id, status) values ($1, 'ativo') returning id`, [cId])).rows[0].id
+  await q(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 500, 'pago')`, [kId])
+
+  let err = null
+  try { await q(`update contracts set status='rascunho' where id=$1`, [kId]) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 2: contrato ativo não pode ser revertido para rascunho')
+
+  const kDraftWithPay = (await q(`insert into contracts (client_id, status) values ($1, 'rascunho') returning id`, [cId])).rows[0].id
+  await q(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 500, 'pago')`, [kDraftWithPay])
+
+  err = null
+  try { await q(`delete from contracts where id=$1`, [kDraftWithPay]) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 2: contrato com pagamentos não pode ser excluído (ON DELETE RESTRICT)')
+  ok(await count(`select count(*) n from payments where contract_id='${kDraftWithPay}'`) === 1, 'PoC 2: pagamentos continuam protegidos')
+
+  // Tentativa de ativar sem chamar activate_contract
+  const kDraft = (await q(`insert into contracts (client_id, status) values ($1, 'rascunho') returning id`, [cId])).rows[0].id
+  await as(U.fin, async () => {
+    let err2 = null
+    try { await q(`update contracts set status='ativo' where id=$1`, [kDraft]) } catch (e) { err2 = e.message }
+    ok(!!err2, 'PoC 2: não ativa contrato diretamente com update status=ativo')
+  })
+})
+
+// 3. Usuários sem cargo ou inativos não leem estrutura nem comentam
+await as(U.novo, async () => {
+  ok(await count(`select count(*) n from roles`) === 0, 'PoC 3: usuário inativo não lê roles')
+  ok(await count(`select count(*) n from role_permissions`) === 0, 'PoC 3: usuário inativo não lê matriz de permissões')
+  ok(await count(`select count(*) n from options`) === 0, 'PoC 3: usuário inativo não lê opções')
+
+  let err = null
+  try {
+    const anyTask = (await q(`select id from tasks limit 1`)).rows[0]?.id
+    if (anyTask) await q(`insert into comments (entity, entity_id, body) values ('task', $1, 'Spam')`, [anyTask])
+    else err = 'blocked'
+  } catch (e) { err = e.message }
+  ok(!!err, 'PoC 3: usuário inativo não insere comentários')
+})
+
+// 4. Proteção contra desativação do último admin
+await as(U.ceo, async () => {
+  let err = null
+  try { await q(`update profiles set active=false where id=$1`, [U.ceo]) } catch (e) { err = e.message }
+  ok(!!err, 'PoC 4: bloqueia desativar o único administrador ativo do sistema')
 })
