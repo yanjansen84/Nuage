@@ -305,3 +305,15 @@ table.t tr.total-row td { background: var(--raise); }
 .link-list a:hover { text-decoration: underline; }
 .link-list svg { width: 14px; height: 14px; }
 .mg .day em[role="button"] { cursor: pointer; }
+
+/* Usuário criado: senha provisória com botão de copiar */
+.user-created { display: grid; gap: 14px; }
+.user-created p { margin: 0; }
+.user-created .ok-ico { width: 18px; height: 18px; color: var(--ok); vertical-align: -3px; }
+.user-created .pass-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.user-created .pass {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 15px; letter-spacing: .04em;
+  padding: 6px 10px; border-radius: 8px; background: var(--raise); border: 1px solid var(--ln);
+  user-select: all; overflow-wrap: anywhere;
+}
+.user-created > .btn.ghost { justify-self: start; }

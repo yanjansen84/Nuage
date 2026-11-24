@@ -7,7 +7,9 @@ import { demoDb } from './demoDb'
 export type Match<T extends Table> = Partial<Tables[T]>
 export type Order = { column: string; ascending?: boolean }
 
-export interface InviteInput { email: string; name: string; role: string }
+export interface NewUserInput { email: string; name: string; role: string }
+/** Resultado da criação: a senha provisória só existe aqui (não fica salva em lugar nenhum). */
+export interface NewUserResult { id: string; email: string; password: string }
 
 export interface Db {
   list<T extends Table>(table: T, match?: Match<T>, order?: Order, limit?: number): Promise<Tables[T][]>
@@ -20,7 +22,7 @@ export interface Db {
   remove<T extends Table>(table: T, match: Match<T>): Promise<void>
   activateContract(contractId: string, ownerId: string | null): Promise<string>
   clientServices(): Promise<ClientService[]>
-  invite(input: InviteInput): Promise<void>
+  createUser(input: NewUserInput): Promise<NewUserResult>
   currentUserId(): string | null
 }
 
@@ -86,16 +88,15 @@ const supabaseDb: Db = {
     fail(error)
     return (data ?? []) as ClientService[]
   },
-  async invite(input) {
-    const { data, error } = await supabase.functions.invoke('invite-user', {
-      body: { ...input, redirectTo: `${window.location.origin}/` },
-    })
+  async createUser(input) {
+    const { data, error } = await supabase.functions.invoke('create-user', { body: input })
     if (error) {
       const ctx = (error as { context?: Response }).context
       const body = ctx ? await ctx.json().catch(() => null) : null
-      throw new Error(body?.error ?? 'Não foi possível enviar o convite.')
+      throw new Error(body?.error ?? 'Não foi possível criar o usuário.')
     }
     if (data?.error) throw new Error(data.error)
+    return data as NewUserResult
   },
   currentUserId: () => uid,
 }

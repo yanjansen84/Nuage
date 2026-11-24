@@ -9,12 +9,12 @@ src/
   lib/supabase.ts      cliente Supabase ("Lembrar meu acesso" troca localStorage/sessionStorage)
   lib/auth.tsx         sessão, perfil e permissões do usuário (can / scope)
   components/AppShell  cabeçalho, faixa e menu filtrado por permissão
-  pages/               Login, DefinirSenha (convite/recuperação), Início, estados
+  pages/               Login, DefinirSenha (senha provisória/recuperação), Início, estados
   routes.tsx           módulos do menu
   styles/              tokens e componentes visuais (portados do protótipo do cliente)
 supabase/
   migrations/          schema, RLS e dados iniciais (rodar em ordem)
-  functions/invite-user  convite de usuários com cargo
+  functions/create-user  criação de usuários com cargo e senha provisória
   tests/rls.test.mjs   testa schema e permissões num Postgres em memória
 ```
 
@@ -41,14 +41,16 @@ supabase/
 
    (ou, com a CLI: `npx supabase link --project-ref <ref>` e `npx supabase db push`)
 2. **Authentication → Sign In / Providers**: desative *Allow new users to sign up*
-   (só entra quem for convidado).
+   (só entra quem for cadastrado por um administrador).
 3. **Authentication → URL Configuration**: em *Site URL* coloque a URL da Vercel e, em
    *Redirect URLs*, adicione a URL da Vercel e `http://localhost:5173`.
 4. **Primeiro usuário (CEO)**: *Authentication → Users → Add user → Create new user*, com e-mail e senha,
    marcando *Auto Confirm User*. O primeiro usuário criado vira CEO automaticamente.
-5. **Função de convite**:
+5. **Função de criação de usuários** (o admin cria a conta e recebe uma senha provisória;
+   a pessoa troca a senha no primeiro acesso). Defina as origens do app e publique:
    ```
-   npx supabase functions deploy invite-user --project-ref <ref>
+   npx supabase secrets set ALLOWED_ORIGIN=https://seu-dominio --project-ref <ref>
+   npx supabase functions deploy create-user --project-ref <ref>
    ```
 
 ### 2. Local
@@ -81,7 +83,7 @@ npm run dev
 - [x] Financeiro: contratado / recebido / previsto separados, vencimentos, atrasos, fim de prazo
 - [x] Projetos e tarefas: lista e kanban, checklist, subtarefas, colaboradores, dependências, comentários
 - [x] Equipe: crachás, contatos protegidos, carga x capacidade
-- [x] Configurações: usuários e convites, permissões por cargo e por pessoa, serviços e preços,
+- [x] Configurações: usuários (criação com senha provisória), permissões por cargo e por pessoa, serviços e preços,
       etapas e status, checklists de onboarding, auditoria
 
 Fica para a Fase 2 (especificação seção 12): produção de conteúdo e aprovação por link, estratégia,

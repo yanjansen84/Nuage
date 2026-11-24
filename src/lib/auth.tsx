@@ -49,7 +49,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const load = useCallback(async (s: Session | null) => {
     setSession(s)
-    if (!s) { setProfile(null); setPerms([]); setStatus('signed-out'); return }
+    if (!s) { setProfile(null); setPerms([]); setNeedsPassword(false); setStatus('signed-out'); return }
+    // usuário criado pelo admin com senha provisória: troca obrigatória no primeiro acesso
+    if (s.user.user_metadata?.must_change_password) setNeedsPassword(true)
     const [{ data: p }, { data: pm }] = await Promise.all([
       supabase.from('profiles').select('id,name,role,link,active').eq('id', s.user.id).maybeSingle(),
       supabase.rpc('my_permissions'),

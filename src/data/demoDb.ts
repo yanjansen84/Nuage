@@ -307,14 +307,18 @@ export const demoDb: Db = {
       }
     return out
   },
-  async invite({ email, name, role }) {
+  async createUser({ email, name, role }) {
     await delay()
-    if (!admin()) throw new Error('Apenas administradores podem convidar usuários')
-    if (rows('profile_details').some((d) => d.email === email)) throw new Error('Já existe um usuário com esse e-mail.')
+    if (!admin()) throw new Error('Apenas administradores podem criar usuários')
+    if (rows('profile_details').some((d) => d.email === email)) throw new Error('Já existe um usuário com este e-mail.')
     const id = uuid()
     rows('profiles').push({ id, name, role, link: 'Efetivo', active: true, weekly_capacity_hours: null })
     rows('profile_details').push({ id, email, phone: null, insta: null, x: null })
     audit('profiles', 'insert', null, { id, name, role }); persist()
+    // no demo não há login real: a senha é só ilustrativa (no sistema real, quem gera é o servidor)
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$%&*!?'
+    const password = Array.from(crypto.getRandomValues(new Uint32Array(14)), (n) => abc[n % abc.length]).join('')
+    return { id, email, password }
   },
   currentUserId: () => DEMO_USER_ID,
 }

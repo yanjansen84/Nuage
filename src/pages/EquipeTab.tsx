@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { db } from '../data/db'
+import { Check, Copy, KeyRound } from 'lucide-react'
+import { db, type NewUserResult } from '../data/db'
 import { useRun, useTable } from '../data/hooks'
 import type { ProfileRow } from '../data/types'
 import { useAuth } from '../lib/auth'
@@ -7,7 +8,7 @@ import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { Empty, Field, initials, Loading, maskEmail, maskInteger, maskPhone, maskSocial, nn, num, Select } from '../ui/kit'
 
-/** Aba "Equipe e usuários" de Configurações: crachás, contatos, cargo e convite. */
+/** Aba "Equipe e usuários" de Configurações: crachás, contatos, cargo e criação de usuários. */
 export function EquipeTab() {
   const { can } = useAuth()
   const admin = can('configuracoes', 'write')
@@ -15,7 +16,7 @@ export function EquipeTab() {
   const roles = useTable('roles', { order: { column: 'sort' } })
   const tasks = useTable('tasks', { enabled: can('projetos') })
   const [openId, setOpenId] = useState<string | null>(null)
-  const [inviting, setInviting] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [showOff, setShowOff] = useState(false)
   const roleName = (k: string | null) => roles.data?.find((r) => r.key === k)?.name.split(' / ')[0] ?? 'Sem cargo'
   const L = [...(profiles.data ?? [])].filter((p) => showOff || p.active)
@@ -31,7 +32,7 @@ export function EquipeTab() {
         <label className="mu" style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14 }}>
           <input type="checkbox" checked={showOff} onChange={(e) => setShowOff(e.target.checked)} /> mostrar inativos
         </label>
-        {admin && <button className="btn primary" onClick={() => setInviting(true)}>Convidar pessoa</button>}
+        {admin && <button className="btn primary" onClick={() => setCreating(true)}>Novo usuário</button>}
       </div>
       {profiles.isLoading ? <Loading /> : !L.length ? <Empty>Nenhuma pessoa cadastrada</Empty> : (
         <div className="badges">
@@ -49,7 +50,7 @@ export function EquipeTab() {
         </div>
       )}
       {open && <PersonModal key={open.id} person={open} roleName={roleName(open.role)} openTasks={openOf(open.id)} onClose={() => setOpenId(null)} />}
-      {inviting && <InviteModal onClose={() => setInviting(false)} />}
+      {creating && <NewUserModal onClose={() => setCreating(false)} />}
     </>
   )
 }
@@ -148,22 +149,87 @@ function PersonModal({ person, roleName, openTasks, onClose }: {
   )
 }
 
-function InviteModal({ onClose }: { onClose: () => void }) {
+function NewUserModal({ onClose }: { onClose: () => void }) {
   const run = useRun()
   const roles = useTable('roles', { order: { column: 'sort' } })
   const [f, setF] = useState({ name: '', email: '', role: '' })
-  const valid = f.name.trim() && /\S+@\S+\.\S+/.test(f.email) && f.role
+  const [busy, setBusy] = useState(false)
+  const [created, setCreated] = useState<(NewUserResult & { name: string }) | null>(null)
+  const valid = f.name.trim() && /\S+@\S+\.\S+/.test(f.email) && f.role && !busy
+
   async function send() {
     if (!valid) return
-    if (await run(() => db.invite({ name: f.name.trim(), email: f.email.trim().toLowerCase(), role: f.role }), 'Convite enviado')) onClose()
+    setBusy(true)
+    const name = f.name.trim()
+    const r = await run(() => db.createUser({ name, email: f.email.trim().toLowerCase(), role: f.role }))
+    setBusy(false)
+    if (r && r !== true) setCreated({ ...r, name })
   }
+
+  if (created) return <UserCreatedModal user={created} onClose={onClose} />
+
   return (
-    <Modal open onClose={onClose} title="Convidar pessoa" size="sm"
-      footer={<><button className="btn primary" onClick={send} disabled={!valid}>Enviar convite</button><button className="btn" onClick={onClose}>Cancelar</button></>}>
-      <p className="mu" style={{ marginTop: 0 }}>A pessoa recebe um e-mail com o link para criar a senha</p>
-      <Field label="Nome *"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus placeholder="Nome completo" /></Field>
-      <Field label="E-mail *"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="nome@empresa.com.br" /></Field>
+    <Modal open onClose={onClose} title="Novo usuário" size="sm"
+      footer={<><button className="btn primary" onClick={send} disabled={!valid}>{busy ? 'Criando…' : 'Criar usuário'}</button><button className="btn" onClick={onClose}>Cancelar</button></>}>
+      <p className="mu" style={{ marginTop: 0 }}>O sistema gera uma senha provisória. A pessoa troca a senha no primeiro acesso.</p>
+      <Field label="Nome *"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus placeholder="Nome completo" maxLength={120} /></Field>
+      <Field label="E-mail de acesso *"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: maskEmail(e.target.value) })} placeholder="nome@empresa.com.br" /></Field>
       <Field label="Cargo *"><Select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} placeholder="Selecione o cargo" options={(roles.data ?? []).map((r) => ({ value: r.key, label: r.name }))} /></Field>
+    </Modal>
+  )
+}
+
+/** Confirmação com a senha provisória. Ela só aparece aqui: ao fechar, não há como vê-la de novo. */
+function UserCreatedModal({ user, onClose }: { user: NewUserResult & { name: string }; onClose: () => void }) {
+  const { toast } = useFeedback()
+  const [copied, setCopied] = useState<'senha' | 'tudo' | null>(null)
+
+  async function copy(text: string, what: 'senha' | 'tudo') {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // navegadores sem a API de área de transferência (ou sem permissão)
+      const t = document.createElement('textarea')
+      t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0'
+      // dentro do <dialog> aberto: fora dele o foco/seleção é bloqueado pelo modal
+      ;(document.querySelector('dialog[open]') ?? document.body).appendChild(t)
+      t.select()
+      const ok = document.execCommand('copy')
+      t.remove()
+      if (!ok) return toast('Não foi possível copiar. Selecione a senha e copie manualmente.', true)
+    }
+    setCopied(what)
+    toast(what === 'senha' ? 'Senha copiada' : 'Dados de acesso copiados')
+  }
+
+  const access = [
+    'Acesso ao Na.Nu',
+    `Endereço: ${window.location.origin}`,
+    `E-mail: ${user.email}`,
+    `Senha provisória: ${user.password}`,
+    'No primeiro acesso você vai criar uma senha nova.',
+  ].join('\n')
+
+  return (
+    <Modal open onClose={onClose} title="Usuário criado com sucesso" size="sm"
+      footer={<><button className="btn primary" onClick={onClose}>Concluir</button></>}>
+      <div className="user-created">
+        <p style={{ marginTop: 0 }}><Check aria-hidden className="ok-ico" /> <b>{user.name}</b> já pode acessar o Na.Nu.</p>
+        <dl className="kv">
+          <dt>E-mail de acesso</dt><dd>{user.email}</dd>
+          <dt>Senha provisória</dt>
+          <dd className="pass-row">
+            <code className="pass" aria-label="Senha provisória">{user.password}</code>
+            <button type="button" className="btn" onClick={() => copy(user.password, 'senha')}>
+              {copied === 'senha' ? <Check aria-hidden /> : <Copy aria-hidden />}{copied === 'senha' ? 'Copiada' : 'Copiar senha'}
+            </button>
+          </dd>
+        </dl>
+        <button type="button" className="btn ghost" onClick={() => copy(access, 'tudo')}>
+          {copied === 'tudo' ? <Check aria-hidden /> : <KeyRound aria-hidden />}{copied === 'tudo' ? 'Dados copiados' : 'Copiar e-mail, senha e endereço'}
+        </button>
+        <p className="money-note">Envie a senha por um canal privado. Por segurança, ela não será exibida de novo e a pessoa terá que trocá-la no primeiro acesso.</p>
+      </div>
     </Modal>
   )
 }
