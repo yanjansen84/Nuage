@@ -1,0 +1,8 @@
+# Configuração do projeto Supabase aplicada com `npx supabase config push`.
+# Só as propriedades declaradas aqui são enviadas; o restante fica como está no painel.
+
+[auth]
+# Ninguém se cadastra sozinho: contas são criadas pelo administrador
+# (função create-user) ou pelo painel do Supabase. Com o cadastro aberto e o
+# banco sem usuários, a primeira conta criada viraria administradora.
+enable_signup = false
