@@ -13,7 +13,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // registro por arquivo externo (/registerSW.js): compatível com o CSP, sem script inline
       injectRegister: 'script-defer',
-      includeAssets: ['favicon.svg', 'icons/apple-touch-icon.png', 'icons/badge-96.png'],
+      includeAssets: ['favicon.ico', 'icons/apple-touch-icon.png', 'icons/badge-96.png'],
       manifest: {
         id: '/',
         name: 'Na.Nu · Gestão da Nuage',
@@ -34,7 +34,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         // qualquer rota do app abre offline a partir do index.html em cache
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
@@ -42,14 +42,16 @@ export default defineConfig({
         skipWaiting: true,
         // clique no alerta do sistema leva à tela da notificação
         importScripts: ['sw-notifications.js'],
+        // filtros por expressão regular: não dependem do tipo URL do Node (@types/node é
+        // dependência opcional e não é instalado no build limpo da Vercel)
         runtimeCaching: [
           {
-            urlPattern: ({ url }) => url.origin === 'https://fonts.googleapis.com',
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
             handler: 'StaleWhileRevalidate',
             options: { cacheName: 'google-fonts-css' },
           },
           {
-            urlPattern: ({ url }) => url.origin === 'https://fonts.gstatic.com',
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\//,
             handler: 'CacheFirst',
             options: {
               cacheName: 'google-fonts',
