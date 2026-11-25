@@ -6,7 +6,7 @@ import type { ClientService, Table, Tables } from './types'
 
 type Store = { [K in Table]: Tables[K][] }
 type AnyRow = Record<string, unknown>
-const KEY = 'nanu.demo.db.v6'
+const KEY = 'nanu.demo.db.v8'
 
 let store: Store = load()
 function load(): Store {
@@ -61,7 +61,8 @@ function canRead(t: Table, r: AnyRow): boolean {
     case 'profile_details': return r.id === me() || read('equipe')
     case 'user_permissions': return r.user_id === me() || admin()
     case 'audit_log': return admin()
-    case 'offer_prices': case 'payments': return read('financeiro')
+    case 'notifications': return r.user_id === me()
+    case 'offer_prices': case 'payments': case 'bills': return read('financeiro')
     case 'lead_values': return read('financeiro') && read('crm')
     case 'contracts': return read('contratos')
     case 'contract_items': return read('contratos') && read('financeiro')
@@ -88,6 +89,8 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
     case 'profile_details': return op === 'update' && (r.id === me() || writeAll('equipe'))
     case 'roles': return admin() && !(op === 'delete' && r.key === 'ceo')
     case 'modules': case 'audit_log': return false
+    // como no banco: a pessoa só marca como lida e dispensa as próprias; quem cria é o sistema
+    case 'notifications': return op !== 'insert' && r.user_id === me()
     case 'role_permissions': case 'user_permissions': return admin()
     case 'options': case 'services': case 'service_offers': case 'checklist_templates': case 'checklist_template_items':
       return writeAll('configuracoes')
@@ -104,6 +107,7 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
       return write('contratos') && write('financeiro') && c?.status === 'rascunho'
     }
     case 'payments': return write('financeiro')
+    case 'bills': return op === 'delete' ? del('financeiro') : write('financeiro')
     case 'projects':
       if (op === 'insert') return writeAll('projetos')
       if (op === 'delete') return del('projetos') && readAll('projetos')
@@ -127,17 +131,18 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
 
 // ---------- regras que no banco são triggers ----------
 const HAS_ID: Table[] = ['profiles', 'profile_details', 'options', 'services', 'service_offers', 'checklist_templates',
-  'checklist_template_items', 'clients', 'leads', 'contracts', 'contract_items', 'payments', 'projects', 'tasks', 'task_checklist', 'comments', 'events', 'contents']
+  'checklist_template_items', 'clients', 'leads', 'contracts', 'contract_items', 'payments', 'bills', 'projects', 'tasks', 'task_checklist', 'comments', 'events', 'contents', 'notifications']
 
 function defaults(t: Table, r: AnyRow): AnyRow {
   const out: AnyRow = { ...r }
   if (HAS_ID.includes(t) && !out.id) out.id = uuid()
-  if (['clients', 'leads', 'contracts', 'projects', 'tasks', 'events', 'contents'].includes(t) && out.created_by === undefined) out.created_by = me()
-  if (['clients', 'leads', 'contracts', 'tasks', 'comments', 'events', 'contents'].includes(t) && !out.created_at) out.created_at = new Date().toISOString()
+  if (['clients', 'leads', 'contracts', 'projects', 'tasks', 'events', 'contents', 'bills'].includes(t) && out.created_by === undefined) out.created_by = me()
+  if (['clients', 'leads', 'contracts', 'tasks', 'comments', 'events', 'contents', 'bills'].includes(t) && !out.created_at) out.created_at = new Date().toISOString()
   if (t === 'comments' && !out.author_id) out.author_id = me()
   if (t === 'comments' && out.resolved === undefined) out.resolved = false
   if (t === 'tasks') { out.priority ??= 'media'; out.parent_id ??= null; out.done_at ??= null }
   if (t === 'projects') out.priority ??= 'media'
+  if (t === 'bills') { out.status ??= 'aberto'; out.paid_at ??= null }
   if (t === 'contracts') { out.status ??= 'rascunho'; out.renewal ??= 'automatica' }
   if (t === 'payments') out.status ??= 'previsto'
   if (t === 'options') { out.active ??= true; out.is_final ??= false }
@@ -320,6 +325,15 @@ export const demoDb: Db = {
     const password = Array.from(crypto.getRandomValues(new Uint32Array(14)), (n) => abc[n % abc.length]).join('')
     return { id, email, password }
   },
+  async refreshNotifications() { await delay(); return 0 },
+  async markAllNotificationsRead() {
+    await delay()
+    const now = new Date().toISOString()
+    for (const n of rows('notifications')) if (n.user_id === me() && !n.read_at) n.read_at = now
+    persist()
+  },
+  // sem servidor no demo: não há tempo real
+  subscribeNotifications: () => () => {},
   currentUserId: () => DEMO_USER_ID,
 }
 

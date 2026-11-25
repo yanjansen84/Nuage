@@ -63,6 +63,16 @@ export interface Payment extends Row {
   paid_at: string | null; method: 'pix' | 'boleto' | 'cartao' | null; notes: string | null
 }
 
+export type BillStatus = 'aberto' | 'pago' | 'cancelado'
+export type BillMethod = 'pix' | 'boleto' | 'cartao' | 'transferencia' | 'debito' | 'dinheiro'
+/** Conta a pagar (despesa da agência). "Atrasada" = aberta com vencimento passado (não é gravado). */
+export interface Bill extends Row {
+  description: string; supplier: string | null; category_id: string | null; amount: number; due_date: string
+  status: BillStatus; paid_at: string | null; method: BillMethod | null; notes: string | null
+  series_id: string | null; installment: number | null; installments: number | null
+  created_by: string | null; created_at: string
+}
+
 export interface Project extends Row {
   client_id: string | null; service_id: string | null; contract_id: string | null; name: string
   description: string | null; objective: string | null; owner_id: string | null; status_id: string | null
@@ -94,6 +104,11 @@ export interface Content extends Row {
   posted_at: string | null; posted_url: string | null; created_by: string | null; created_at: string
 }
 export interface ContentHistory { id: number; content_id: string; at: string; actor: string | null; from_label: string | null; to_label: string | null }
+/** Aviso para uma pessoa. Criado só pelo banco (triggers e lembretes); o app lê, marca como lida e dispensa. */
+export interface NotificationRow extends Row {
+  user_id: string; kind: string; title: string; body: string | null; link: string | null
+  source: string | null; read_at: string | null; created_at: string
+}
 export interface AuditEntry {
   id: number; at: string; actor: string | null; action: string; table_name: string
   record_id: string | null; old_data: Record<string, unknown> | null; new_data: Record<string, unknown> | null
@@ -119,6 +134,7 @@ export interface Tables {
   contracts: Contract
   contract_items: ContractItem
   payments: Payment
+  bills: Bill
   projects: Project
   project_members: ProjectMember
   tasks: Task
@@ -130,5 +146,6 @@ export interface Tables {
   contents: Content
   content_history: ContentHistory
   audit_log: AuditEntry
+  notifications: NotificationRow
 }
 export type Table = keyof Tables

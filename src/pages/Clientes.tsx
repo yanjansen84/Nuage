@@ -135,7 +135,7 @@ export function ClienteDetalhe() {
       <Link to="/clientes" className="back"><ChevronLeft aria-hidden />Clientes</Link>
       <PageHead title={c.name} sub={<>{s && <Tag color={s.color}>{s.label}</Tag>} {c.segment}</>}
         actions={<>
-          <Link className="btn" to={`/agenda?cliente=${c.id}`}><CalendarDays aria-hidden />Ver agenda</Link>
+          {can('dashboard') && <Link className="btn" to={`/agenda?cliente=${c.id}`}><CalendarDays aria-hidden />Ver agenda</Link>}
           {can('clientes', 'write') && <button className="btn" onClick={() => setEditing(true)}>Editar</button>}
           {can('contratos', 'write') && <Link className="btn primary" to={`/contratos/novo?cliente=${c.id}`}>Novo contrato</Link>}
           {can('clientes', 'delete') && <button className="btn danger" onClick={remove}>Excluir</button>}

@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
 import { useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { BillingType, OptionRow, RolePermission, RoleRow, Service, ServiceOffer } from '../data/types'
@@ -8,33 +8,31 @@ import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { Empty, Field, fdt, Loading, maskInteger, maskMoney, money, nn, num, parseMoney, PageHead, Select, Tabs } from '../ui/kit'
-import { EquipeTab } from './EquipeTab'
 import { Pagination } from '../ui/Pagination'
 import { useQuery } from '@tanstack/react-query'
 import type { Table } from '../data/types'
 
-type Aba = 'equipe' | 'permissoes' | 'servicos' | 'etapas' | 'checklists' | 'auditoria'
+type Aba = 'permissoes' | 'servicos' | 'etapas' | 'checklists' | 'auditoria'
 
 export default function Configuracoes() {
   const { can } = useAuth()
   const admin = can('configuracoes', 'write')
   const seeConfig = can('configuracoes')
-  const seeTeam = can('equipe') || admin
   const [sp, setSp] = useSearchParams()
-  const requested = sp.get('aba') as Aba | null
-  const aba: Aba = requested === 'usuarios' as never ? 'equipe' : requested ?? (seeTeam ? 'equipe' : 'servicos')
+  const requested = sp.get('aba')
+  // a equipe virou página própria: links antigos (?aba=equipe / ?aba=usuarios) vão para lá
+  if (requested === 'equipe' || requested === 'usuarios') return <Navigate to="/equipe" replace />
+  const aba: Aba = (requested as Aba | null) ?? (admin ? 'permissoes' : 'servicos')
   return (
     <>
-      <PageHead title="Configurações" sub={admin ? 'Tudo aqui é editável sem mexer no código' : seeConfig ? 'Consulta das configurações. Somente administradores alteram.' : 'Equipe da agência'} />
+      <PageHead title="Configurações" sub={admin ? 'Tudo aqui é editável sem mexer no código' : 'Consulta das configurações. Somente administradores alteram.'} />
       <Tabs value={aba} onChange={(v) => setSp({ aba: v }, { replace: true })} items={[
-        { key: 'equipe', label: 'Equipe e usuários', hidden: !seeTeam },
         { key: 'permissoes', label: 'Permissões', hidden: !admin },
         { key: 'servicos', label: 'Serviços e preços', hidden: !seeConfig },
         { key: 'etapas', label: 'Etapas e status', hidden: !seeConfig },
         { key: 'checklists', label: 'Checklists', hidden: !seeConfig },
         { key: 'auditoria', label: 'Auditoria', hidden: !admin },
       ]} />
-      {aba === 'equipe' && seeTeam && <EquipeTab />}
       {aba === 'permissoes' && admin && <Permissoes />}
       {aba === 'servicos' && seeConfig && <Servicos />}
       {aba === 'etapas' && seeConfig && <Etapas />}
@@ -347,6 +345,7 @@ const SETS: { key: string; label: string; final?: string }[] = [
   { key: 'task_status', label: 'Status de tarefa', final: 'Conclui a tarefa' },
   { key: 'content_status', label: 'Status de conteúdo', final: 'Marca como postado' },
   { key: 'content_format', label: 'Formatos de conteúdo' },
+  { key: 'bill_category', label: 'Categorias de contas a pagar' },
 ]
 
 function Etapas() {
@@ -487,7 +486,7 @@ const TABLE_LABEL: Record<string, string> = {
   profiles: 'Usuário', profile_details: 'Contatos', role_permissions: 'Permissão de cargo', user_permissions: 'Permissão pessoal',
   options: 'Cadastro', services: 'Serviço', service_offers: 'Opção de serviço', offer_prices: 'Preço', checklist_templates: 'Checklist',
   checklist_template_items: 'Item de checklist', clients: 'Cliente', leads: 'Lead', lead_values: 'Valor de lead', contracts: 'Contrato',
-  contract_items: 'Item de contrato', payments: 'Pagamento', projects: 'Projeto', project_members: 'Equipe do projeto', tasks: 'Tarefa',
+  contract_items: 'Item de contrato', payments: 'Pagamento', bills: 'Conta a pagar', projects: 'Projeto', project_members: 'Equipe do projeto', tasks: 'Tarefa',
   task_dependencies: 'Dependência', events: 'Agenda', roles: 'Cargo', contents: 'Conteúdo',
 }
 const ACTION: Record<string, string> = { insert: 'criou', update: 'alterou', delete: 'excluiu' }

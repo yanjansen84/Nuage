@@ -1,8 +1,8 @@
 import { lazy, Suspense, type ReactNode } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { useAuth } from './lib/auth'
-import type { ModuleKey } from './lib/types'
+import { accessOf, canAccess, type Access } from './routes'
 import DefinirSenha from './pages/DefinirSenha'
 import Login from './pages/Login'
 import { EmConstrucao, Loading, Pending, SemAcesso, Unconfigured } from './pages/States'
@@ -19,10 +19,13 @@ const Projetos = lazy(() => import('./pages/Projetos'))
 const Agenda = lazy(() => import('./pages/Agenda'))
 const Conteudo = lazy(() => import('./pages/Conteudo'))
 const Configuracoes = lazy(() => import('./pages/Configuracoes'))
+const Equipe = lazy(() => import('./pages/Equipe'))
 
-function Guard({ module, or, children }: { module: ModuleKey; or?: ModuleKey; children: ReactNode }) {
+/** Bloqueia a rota com a mesma regra que decide se o item aparece no menu. */
+function Guard({ to, children }: { to: string | Access; children: ReactNode }) {
   const { can } = useAuth()
-  return can(module) || (or && can(or)) ? <Suspense fallback={<Loading />}>{children}</Suspense> : <SemAcesso />
+  const access = typeof to === 'string' ? accessOf(to) : to
+  return canAccess(access, can) ? <Suspense fallback={<Loading />}>{children}</Suspense> : <SemAcesso />
 }
 
 export default function App() {
@@ -37,19 +40,19 @@ export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route index element={<Guard module="dashboard"><Inicio /></Guard>} />
-        <Route path="comercial" element={<Guard module="crm"><Comercial /></Guard>} />
-        <Route path="clientes" element={<Guard module="clientes"><Clientes /></Guard>} />
-        <Route path="clientes/:id" element={<Guard module="clientes"><ClienteDetalhe /></Guard>} />
-        <Route path="contratos" element={<Guard module="contratos"><Contratos /></Guard>} />
-        <Route path="contratos/novo" element={<Guard module="contratos"><ContratoEditor /></Guard>} />
-        <Route path="contratos/:id" element={<Guard module="contratos"><ContratoEditor /></Guard>} />
-        <Route path="financeiro" element={<Guard module="financeiro"><Financeiro /></Guard>} />
-        <Route path="projetos" element={<Guard module="projetos"><Projetos /></Guard>} />
-        <Route path="conteudo" element={<Guard module="producao"><Conteudo /></Guard>} />
-        <Route path="agenda" element={<Guard module="dashboard"><Agenda /></Guard>} />
-        <Route path="equipe" element={<Navigate to="/configuracoes?aba=equipe" replace />} />
-        <Route path="configuracoes" element={<Guard module="configuracoes" or="equipe"><Configuracoes /></Guard>} />
+        <Route index element={<Guard to="/"><Inicio /></Guard>} />
+        <Route path="comercial" element={<Guard to="/comercial"><Comercial /></Guard>} />
+        <Route path="clientes" element={<Guard to="/clientes"><Clientes /></Guard>} />
+        <Route path="clientes/:id" element={<Guard to="/clientes"><ClienteDetalhe /></Guard>} />
+        <Route path="contratos" element={<Guard to="/contratos"><Contratos /></Guard>} />
+        <Route path="contratos/novo" element={<Guard to="/contratos"><ContratoEditor /></Guard>} />
+        <Route path="contratos/:id" element={<Guard to="/contratos"><ContratoEditor /></Guard>} />
+        <Route path="financeiro" element={<Guard to="/financeiro"><Financeiro /></Guard>} />
+        <Route path="projetos" element={<Guard to="/projetos"><Projetos /></Guard>} />
+        <Route path="conteudo" element={<Guard to="/conteudo"><Conteudo /></Guard>} />
+        <Route path="agenda" element={<Guard to="/agenda"><Agenda /></Guard>} />
+        <Route path="equipe" element={<Guard to="/equipe"><Equipe /></Guard>} />
+        <Route path="configuracoes" element={<Guard to="/configuracoes"><Configuracoes /></Guard>} />
         <Route path="*" element={<EmConstrucao title="Página não encontrada" />} />
       </Route>
     </Routes>

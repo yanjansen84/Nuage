@@ -2,7 +2,7 @@ import { Check, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
-import { useOptions, usePeople, useRun, useTable } from '../data/hooks'
+import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { Priority, Project, Task } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { Comments } from '../components/Comments'
@@ -62,6 +62,7 @@ function TaskList() {
   const proj = sp.get('projeto') ?? ''
   const setProj = (v: string) => { const n = new URLSearchParams(sp); if (v) n.set('projeto', v); else n.delete('projeto'); setSp(n, { replace: true }) }
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
+  useOpenFromUrl('tarefa', tasks.data, setEditing)
 
   const A = (tasks.data ?? []).filter((t) => !t.parent_id && (!proj || t.project_id === proj))
   const done = A.filter((t) => t.done_at).length

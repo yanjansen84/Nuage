@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import logoBranco from '../assets/logo-nanu-branco.png'
 import { useAuth } from '../lib/auth'
-import { NAV, SECTIONS } from '../routes'
+import { canAccess, NAV, SECTIONS } from '../routes'
 import { resetDemo } from '../data/demoDb'
 import { useTheme } from '../lib/theme'
 import { useTable } from '../data/hooks'
+import { NotificationBell } from './Notifications'
 
 /**
  * Layout responsivo (definido no CSS):
@@ -18,7 +19,8 @@ export default function AppShell() {
   const { profile, roleName, can, signOut, demo } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
   const demoRolesQ = useTable('roles', { order: { column: 'sort' }, enabled: !!demo })
-  const items = NAV.filter((n) => can(n.module) || (n.or && can(n.or)))
+  // só aparece no menu o que a pessoa pode abrir (mesma regra do bloqueio das rotas)
+  const items = NAV.filter((n) => canAccess(n, can))
   const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -56,6 +58,8 @@ export default function AppShell() {
         <NavLink to="/" className="brand" aria-label="Na.Nu · Início">
           <img src={logoBranco} alt="Na.Nu" width={1200} height={309} />
         </NavLink>
+
+        <NotificationBell />
 
         <button
           ref={toggleRef}

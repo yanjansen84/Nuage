@@ -1,15 +1,16 @@
 import { ChevronLeft, ChevronRight, FileDown } from 'lucide-react'
 import { statementPdf } from '../lib/pdf'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
 import { useRun, useTable } from '../data/hooks'
-import type { Payment } from '../data/types'
+import type { Bill, Payment } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { addDays, addMonths, Empty, Field, fd, fdFull, Kpi, Loading, maskMoney, money, nn, parseMoney, PageHead, Seg, Select, Tabs, Tag, today } from '../ui/kit'
 import { Pagination } from '../ui/Pagination'
+import { ContasPagar } from './ContasPagar'
 import { contractMonthly, contractOneTime, minEnd, PAY_METHOD, payState } from './contratosUtil'
 
 const PAY_STATUS: Record<string, { label: string; color: string }> = {
@@ -30,7 +31,10 @@ export default function Financeiro() {
   const clients = useTable('clients')
   const [ym, setYm] = useState(today().slice(0, 7))
   const [editing, setEditing] = useState<Payment | 'new' | null>(null)
-  const [tab, setTab] = useState<'mes' | 'historico'>('mes')
+  // a aba pode vir pelo link (ex.: notificação de contas → /financeiro?aba=pagar)
+  const [sp] = useSearchParams()
+  const [tab, setTab] = useState<'mes' | 'historico' | 'pagar'>(() => (sp.get('aba') === 'pagar' ? 'pagar' : sp.get('aba') === 'historico' ? 'historico' : 'mes'))
+  const [billEditing, setBillEditing] = useState<Bill | 'new' | null>(null)
 
   const P = payments.data ?? []
   const K = contracts.data ?? []
@@ -83,13 +87,17 @@ export default function Financeiro() {
 
   return (
     <>
-      <PageHead title="Financeiro" sub="Acompanhamento essencial de contratos, vencimentos e recebimentos"
-        actions={can('financeiro', 'write') && <>
-          <button className="btn" onClick={generate}>Gerar vencimentos do mês</button>
-          <button className="btn primary" onClick={() => setEditing('new')}>Novo lançamento</button>
-        </>} />
+      <PageHead title="Financeiro" sub="Recebimentos dos contratos e contas a pagar da agência"
+        actions={can('financeiro', 'write') && (tab === 'pagar'
+          ? <button className="btn primary" onClick={() => setBillEditing('new')}>Nova conta a pagar</button>
+          : <>
+            <button className="btn" onClick={generate}>Gerar vencimentos do mês</button>
+            <button className="btn primary" onClick={() => setEditing('new')}>Novo lançamento</button>
+          </>)} />
 
-      <Tabs value={tab} onChange={setTab} items={[{ key: 'mes', label: 'Mês a mês' }, { key: 'historico', label: 'Histórico' }]} />
+      <Tabs value={tab} onChange={setTab} items={[
+        { key: 'mes', label: 'Mês a mês' }, { key: 'pagar', label: 'Contas a pagar' }, { key: 'historico', label: 'Histórico' },
+      ]} />
 
       {tab === 'historico' ? (
         <Historico payments={P} clientName={(id) => clientOf(id)?.name ?? '—'} clientIdOf={(id) => clientOf(id)?.id}
@@ -102,6 +110,10 @@ export default function Financeiro() {
         <button className="btn icon" aria-label="Próximo mês" onClick={() => setYm(addMonths(ym + '-15', 1).slice(0, 7))}><ChevronRight aria-hidden /></button>
         <span className="mu">{label}</span>
       </div>
+
+      {tab === 'pagar' ? (
+        <ContasPagar ym={ym} recebidoMes={recebido} editing={billEditing} setEditing={setBillEditing} />
+      ) : (<>
 
       <div className="kpis">
         <Kpi value={money(contratado)} label="faturamento contratado" hint="Soma mensal dos contratos vigentes (recorrentes)" />
@@ -164,6 +176,7 @@ export default function Financeiro() {
         </Link>
       )) : <p className="mu">Nenhum contrato vence nos próximos 45 dias</p>}
 
+      </>)}
       </>)}
 
       {editing && <PaymentForm payment={editing === 'new' ? null : editing} defaultMonth={ym} onClose={() => setEditing(null)} />}

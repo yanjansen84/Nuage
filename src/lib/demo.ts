@@ -39,6 +39,7 @@ export function demoSeed(): Store {
     ...opt('project_status', [['Planejado', '#2f80ed'], ['Em andamento', '#ea5c2a'], ['Pausado', '#55555f'], ['Concluído', '#2e9e6a', true], ['Cancelado', '#55555f', true]]),
     ...opt('task_status', [['Pendente', '#ea5c2a'], ['Em andamento', '#2f80ed'], ['Bloqueada', '#c0392b'], ['Concluída', '#2e9e6a', true]]),
     ...opt('content_status', [['Ideia', '#8e6bd8'], ['Planejado', '#2f80ed'], ['Em produção', '#ea5c2a'], ['Revisão interna', '#b97d00'], ['Aguardando aprovação', '#d6336c'], ['Ajustes', '#c0392b'], ['Aprovado', '#2e9e6a'], ['Agendado', '#0e9aa7'], ['Publicado', '#55555f', true]]),
+    ...opt('bill_category', [['Aluguel e condomínio', '#5b4bdb'], ['Folha de pagamento', '#ea5c2a'], ['Impostos e taxas', '#c0392b'], ['Fornecedores', '#0e9aa7'], ['Software e assinaturas', '#2f80ed'], ['Marketing e anúncios', '#d6336c'], ['Equipamentos', '#b97d00'], ['Outros', '#55555f']]),
     ...opt('content_format', [['Reels', null], ['Stories', null], ['Carrossel', null], ['Estático', null], ['Fotografia', null], ['Vídeo institucional', null], ['Outro', null]]),
   ]
   const o = (set: string, label: string) => options.find((x) => x.set_key === set && x.label === label)!.id
@@ -128,6 +129,23 @@ export function demoSeed(): Store {
     { id: id('pay'), contract_id: 'ct-b', due_date: due(0), amount: 1200, status: 'pago', paid_at: day(-3), method: 'pix', notes: 'Pacote Studio 5 vídeos' },
   ]
 
+  // contas a pagar de exemplo (uma atrasada, uma paga, uma série parcelada)
+  const bill = (description: string, category: string, amount: number, dueOffset: number, paid = false, extra: Partial<Tables['bills']> = {}): Tables['bills'] => ({
+    id: id('bill'), description, supplier: null, category_id: o('bill_category', category), amount, due_date: day(dueOffset),
+    status: paid ? 'pago' : 'aberto', paid_at: paid ? day(dueOffset) : null, method: 'pix', notes: null,
+    series_id: null, installment: null, installments: null, created_by: DEMO_USER_ID, created_at: now(), ...extra,
+  })
+  const serie = 'serie-notebook'
+  const bills: Tables['bills'][] = [
+    bill('Aluguel do escritório', 'Aluguel e condomínio', 3200, -3, false, { supplier: 'Imobiliária Exemplo', method: 'boleto' }),
+    bill('Folha de pagamento', 'Folha de pagamento', 9800, -8, true, { method: 'transferencia' }),
+    bill('Simples Nacional', 'Impostos e taxas', 1450, 5, false, { method: 'boleto' }),
+    bill('Ferramentas de design (assinatura)', 'Software e assinaturas', 290, 2, false, { method: 'cartao' }),
+    bill('Anúncios Meta (verba própria)', 'Marketing e anúncios', 600, 12),
+    ...[1, 2, 3].map((n) => bill(`Notebook da edição (${n}/3)`, 'Equipamentos', 1500, -10 + (n - 1) * 30, n === 1,
+      { supplier: 'Loja Exemplo', method: 'cartao', series_id: serie, installment: n, installments: 3 })),
+  ]
+
   const proj = (pid: string, name: string, client_id: string, owner: string, status: string, dueOffset: number): Tables['projects'] => ({
     id: pid, client_id, service_id: null, contract_id: null, name, description: null, objective: null, owner_id: owner,
     status_id: o('project_status', status), priority: 'media', start_date: day(-20), due_date: day(dueOffset), created_by: null,
@@ -185,9 +203,22 @@ export function demoSeed(): Store {
     profiles, profile_details: details, roles, modules, role_permissions, user_permissions: [],
     options, services, service_offers: offers, offer_prices: prices,
     checklist_templates: [tpl], checklist_template_items: tplItems,
-    clients, leads, lead_values, contracts, contract_items, payments,
+    clients, leads, lead_values, contracts, contract_items, payments, bills,
     projects, project_members, tasks, task_collaborators: [], task_dependencies, task_checklist,
     comments: [], audit_log: [],
+    notifications: (() => {
+      const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString()
+      const nt = (kind: string, title: string, body: string | null, link: string | null, min: number, read = false): Tables['notifications'] =>
+        ({ id: id('ntf'), user_id: DEMO_USER_ID, kind, title, body, link, source: null, read_at: read ? ago(min - 1) : null, created_at: ago(min) })
+      return [
+        nt('task_assigned', 'Ana atribuiu uma tarefa a você', `${tasks[0].title} · vence ${day(-2).split('-').reverse().slice(0, 2).join('/')}`, `/projetos?tarefa=${tasks[0].id}`, 12),
+        nt('comment', `Novo comentário em ${contents[1].title}`, 'Bruno: Ajustei a legenda, pode aprovar?', `/conteudo?conteudo=${contents[1].id}`, 45),
+        nt('bills_due', '2 conta(s) a pagar vencendo ou vencida(s)', 'Total de R$ 4.650,00', '/financeiro?aba=pagar', 90),
+        nt('lead_followup', 'Retorno de lead atrasado', `${leads[1].name} · Enviar portfólio`, `/comercial?lead=${leads[1].id}`, 60 * 20),
+        nt('task_done', 'Carla concluiu uma tarefa', tasks[3].title, `/projetos?tarefa=${tasks[3].id}`, 60 * 30, true),
+        nt('event', 'Compromisso da agência: Reunião geral da agência', 'Sexta às 17:00', '/agenda', 60 * 50, true),
+      ]
+    })(),
     events: [
       { id: id('ev'), title: 'Reunião de alinhamento mensal', date: day(1), time: '10:00', profile_id: null, client_id: 'cli-a', notes: null, created_by: null, created_at: now() },
       { id: id('ev'), title: 'Captação de vídeos', date: day(3), time: '14:00', profile_id: 'demo-davi', client_id: 'cli-b', notes: 'Levar iluminação', created_by: null, created_at: now() },

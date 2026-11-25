@@ -1,7 +1,7 @@
 import { Check, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { db } from '../data/db'
-import { useOptions, usePeople, useRun, useTable } from '../data/hooks'
+import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { Content } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { Comments } from '../components/Comments'
@@ -24,6 +24,7 @@ export default function Conteudo() {
   const [f, setF] = useState({ c: '', s: '', w: '', q: '' })
   const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1) })
   const [editing, setEditing] = useState<Content | { date?: string } | null>(null)
+  useOpenFromUrl('conteudo', contents.data, setEditing)
 
   const all = contents.data ?? []
   const L = all.filter((c) => (!f.c || c.client_id === f.c) && (!f.s || c.status_id === f.s) && (!f.w || c.owner_id === f.w)

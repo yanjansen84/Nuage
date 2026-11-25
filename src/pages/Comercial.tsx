@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../data/db'
-import { useOptions, usePeople, useRun, useTable } from '../data/hooks'
+import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { Lead } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { Comments } from '../components/Comments'
@@ -21,6 +21,7 @@ export default function Comercial() {
   const [q, setQ] = useState('')
   const [owner, setOwner] = useState('')
   const [editing, setEditing] = useState<Lead | 'new' | null>(null)
+  useOpenFromUrl('lead', leads.data, setEditing)
 
   const all = leads.data ?? []
   const L = all.filter((l) =>

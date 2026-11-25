@@ -23,6 +23,11 @@ export interface Db {
   activateContract(contractId: string, ownerId: string | null): Promise<string>
   clientServices(): Promise<ClientService[]>
   createUser(input: NewUserInput): Promise<NewUserResult>
+  /** Gera os lembretes do dia do usuário logado (idempotente). Retorna quantos avisos novos surgiram. */
+  refreshNotifications(): Promise<number>
+  markAllNotificationsRead(): Promise<void>
+  /** Avisa quando chega/muda uma notificação do usuário (tempo real). Retorna a função que cancela. */
+  subscribeNotifications(userId: string, onChange: (n: Tables['notifications'] | null) => void): () => void
   currentUserId(): string | null
 }
 
@@ -97,6 +102,23 @@ const supabaseDb: Db = {
     }
     if (data?.error) throw new Error(data.error)
     return data as NewUserResult
+  },
+  async refreshNotifications() {
+    const { data, error } = await supabase.rpc('generate_my_notifications')
+    fail(error)
+    return (data as number | null) ?? 0
+  },
+  async markAllNotificationsRead() {
+    const { error } = await supabase.rpc('mark_all_notifications_read')
+    fail(error)
+  },
+  subscribeNotifications(userId, onChange) {
+    const ch = supabase
+      .channel(`notificacoes:${userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+        (p) => onChange(p.eventType === 'INSERT' ? (p.new as Tables['notifications']) : null))
+      .subscribe()
+    return () => { void supabase.removeChannel(ch) }
   },
   currentUserId: () => uid,
 }

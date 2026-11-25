@@ -8,7 +8,7 @@ const q = (s, p) => db.query(s, p)
 const ok = (c, m) => { console.log((c ? 'OK   ' : 'FAIL ') + m); if (!c) process.exitCode = 1 }
 
 await db.exec(`
-create role anon nologin; create role authenticated nologin;
+create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
 create schema auth;
 create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true),'')::uuid $$;
@@ -19,9 +19,8 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) {
   await db.exec(readFileSync(`${dir}/${f}`, 'utf8'))
   console.log('aplicado', f)
 }
-await db.exec(`grant usage on schema public to authenticated, anon;
-grant all on all tables in schema public to authenticated, anon;
-grant all on all functions in schema public to authenticated;`)
+// As permissões vêm só das migrations (como em produção). Conceder tudo de novo
+// aqui escondia os revoke das migrations e deixava passar testes de acesso.
 
 ok((await q("select count(*)::int n from roles")).rows[0].n === 1, 'sistema começa só com o cargo de administrador')
 
@@ -345,3 +344,98 @@ await as(U.ceo, async () => {
   try { await q(`update profiles set active=false where id=$1`, [U.ceo2]) } catch (e) { err = e.message }
   ok(!err, 'PoC 7: com dois admins efetivos, um deles pode ser desativado')
 })
+
+// 8. A chave de serviço (Edge Functions) precisa ler e gravar nas tabelas.
+// Projetos Supabase novos não dão esse acesso automaticamente; sem ele, a
+// função create-user não enxergava os cargos e falhava com 400.
+{
+  const priv = async (obj, p) => (await q(`select has_table_privilege('service_role', $1, $2) ok`, [obj, p])).rows[0].ok
+  ok(await priv('public.roles', 'select'), 'PoC 8: service_role lê roles (create-user valida o cargo)')
+  ok(await priv('public.profiles', 'update'), 'PoC 8: service_role atualiza profiles (create-user grava nome/cargo)')
+  ok((await q(`select has_function_privilege('service_role', 'public.is_admin()', 'execute') ok`)).rows[0].ok, 'PoC 8: service_role executa funções do public')
+}
+
+// ---------- Contas a pagar ----------
+{
+  const cat = (await q(`select id from options where set_key='bill_category' and label='Aluguel e condomínio'`)).rows[0]?.id
+  ok(!!cat, 'Contas a pagar: categorias padrão criadas')
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  let billId
+  await as(U.fin, async () => {
+    billId = (await q(`insert into bills (description, supplier, category_id, amount, due_date) values ('Aluguel do escritório', 'Imobiliária', $1, 3200, current_date - 2) returning id, status, created_by`, [cat])).rows[0]
+    ok(billId.status === 'aberto' && billId.created_by === U.fin, 'Contas a pagar: financeiro cria conta (aberta, autor registrado)')
+    billId = billId.id
+    ok(!!await tenta(`update bills set status='pago' where id=$1`, [billId]), 'Contas a pagar: conta paga exige data de pagamento')
+    ok(!await tenta(`update bills set status='pago', paid_at=current_date where id=$1`, [billId]), 'Contas a pagar: financeiro marca como paga')
+    ok(!!await tenta(`update bills set paid_at=current_date, status='aberto' where id=$1`, [billId]), 'Contas a pagar: conta em aberto não tem data de pagamento')
+    ok(!!await tenta(`insert into bills (description, amount, due_date) values ('x', -1, current_date)`), 'Contas a pagar: valor negativo é recusado')
+  })
+  await as(U.des, async () => {
+    ok(await count(`select count(*) n from bills`) === 0, 'Contas a pagar: designer (sem Financeiro) não vê contas')
+    ok(!!await tenta(`insert into bills (description, amount, due_date) values ('x', 10, current_date)`), 'Contas a pagar: designer não cria conta')
+  })
+  await as(U.ceo, async () => {
+    ok(await count(`select count(*) n from bills`) === 1, 'Contas a pagar: admin vê as contas')
+    ok(await count(`select count(*) n from audit_log where table_name='bills'`) >= 2, 'Contas a pagar: alterações vão para a auditoria')
+  })
+  // (o setup deste teste concede tudo ao anon depois das migrations; em produção o revoke também vale)
+  await as(null, async () => {
+    let n = 0
+    try { n = await count(`select count(*) n from bills`) } catch { n = 0 }
+    ok(n === 0, 'Contas a pagar: visitante não logado não vê nenhuma conta')
+  })
+}
+
+// ---------- Notificações ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  const mine = (uid) => as(uid, () => q(`select kind, title, body, link, read_at from notifications order by created_at`).then((r) => r.rows))
+  // o designer precisa estar ativo e com Projetos/Conteúdo (já está no cenário)
+  let tid, cid
+  await as(U.ceo, async () => {
+    tid = (await q(`insert into tasks (title, owner_id, due_date) values ('Roteiro do reels', $1, current_date + 3) returning id`, [U.des])).rows[0].id
+    await q(`insert into tasks (title, owner_id) values ('Tarefa do próprio CEO', $1)`, [U.ceo])
+  })
+  let n = await mine(U.des)
+  const atrib = n.find((x) => x.kind === 'task_assigned' && x.link === `/projetos?tarefa=${tid}`)
+  ok(!!atrib, 'Notificações: quem recebe uma tarefa é avisado (com link para ela)')
+  ok(/atribuiu/.test(atrib?.title ?? ''), 'Notificações: o aviso diz quem fez a ação')
+  ok(!(await mine(U.ceo)).some((x) => x.title.includes('Tarefa do próprio CEO')), 'Notificações: ninguém é avisado do que ele mesmo fez')
+  ok(!(await mine(U.fin)).some((x) => x.kind === 'task_assigned'), 'Notificações: quem não tem relação com a tarefa não recebe nada')
+
+  await as(U.ceo, () => q(`update tasks set title=title where id=$1`, [tid]))
+  ok((await mine(U.des)).filter((x) => x.kind === 'task_assigned' && x.link.endsWith(tid)).length === 1, 'Notificações: o mesmo evento não gera aviso repetido')
+
+  await as(U.des, async () => {
+    await q(`insert into comments (entity, entity_id, body) values ('task', $1, 'Pode revisar o roteiro?')`, [tid])
+  })
+  ok((await mine(U.ceo)).some((x) => x.kind === 'comment' && x.body.includes('Pode revisar')), 'Notificações: comentário avisa o criador da tarefa')
+
+  // não pode vazar: recebe só quem tem acesso ao módulo
+  await as(U.ceo, async () => {
+    cid = (await q(`insert into contents (title, owner_id) values ('Post secreto', $1) returning id`, [U.fin])).rows[0].id
+  })
+  ok(!(await mine(U.fin)).some((x) => x.link === `/conteudo?conteudo=${cid}`), 'Notificações: sem acesso ao módulo, não recebe aviso (nada vaza no título)')
+
+  // o usuário não cria nem altera o texto de notificações; só marca como lida e dispensa as dele
+  await as(U.des, async () => {
+    ok(!!await tenta(`insert into notifications (user_id, kind, title) values ($1, 'x', 'falsa')`, [U.ceo]), 'Notificações: usuário não cria aviso para outra pessoa')
+    ok(!!await tenta(`update notifications set title='alterado'`), 'Notificações: usuário não altera o texto do aviso')
+    ok(!!await tenta(`select notify($1, 'x', 'falsa', null, null, null)`, [U.ceo]), 'Notificações: a função interna notify não é chamável pelo app')
+    ok(await count(`select count(*) n from notifications where user_id <> '${U.des}'`) === 0, 'Notificações: cada um só vê as próprias')
+    await q(`select mark_all_notifications_read()`)
+    ok(await count(`select count(*) n from notifications where read_at is null`) === 0, 'Notificações: marcar todas como lidas')
+    const before = await count(`select count(*) n from notifications`)
+    await q(`delete from notifications where id = (select id from notifications limit 1)`)
+    ok(await count(`select count(*) n from notifications`) === before - 1, 'Notificações: dispensar uma notificação')
+  })
+  ok(!!await as(U.ceo, () => tenta(`insert into notifications (user_id, kind, title, link) values ($1,'x','y','//site.com')`, [U.ceo])) ||
+     !!await tenta(`insert into notifications (user_id, kind, title, link) values ($1,'x','y','//site.com')`, [U.ceo]), 'Notificações: link externo é recusado')
+
+  // lembretes: idempotentes
+  await as(U.ceo, () => q(`update tasks set due_date = current_date where id=$1`, [tid]))
+  const g1 = await as(U.des, () => q(`select generate_my_notifications() n`).then((r) => r.rows[0].n))
+  const g2 = await as(U.des, () => q(`select generate_my_notifications() n`).then((r) => r.rows[0].n))
+  ok(g1 >= 1 && g2 === 0, `Notificações: lembrete "vence hoje" criado uma única vez (${g1} e depois ${g2})`)
+  ok((await mine(U.des)).some((x) => x.kind === 'task_due' && x.title === 'Tarefa vence hoje'), 'Notificações: lembrete de tarefa que vence hoje')
+}

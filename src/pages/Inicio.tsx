@@ -12,6 +12,13 @@ import { MonthGrid } from '../components/MonthGrid'
 import { Modal } from '../ui/Modal'
 import { Seg } from '../ui/kit'
 import { Plus } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { accessOf, canAccess } from '../routes'
+
+/** Linha da carga da equipe: vira link só para quem pode abrir a página Equipe. */
+function LoadRow({ to, children }: { to: string | null; children: ReactNode }) {
+  return to ? <Link to={to} className="row">{children}</Link> : <div className="row">{children}</div>
+}
 
 export default function Inicio() {
   const { profile, can, scope } = useAuth()
@@ -19,6 +26,7 @@ export default function Inicio() {
   const seeTasks = can('projetos')
   const allTasks = scope('projetos') === 'all'
   const fin = can('financeiro')
+  const seeTeam = canAccess(accessOf('/equipe'), can)
 
   const tasks = useTable('tasks', { enabled: seeTasks })
   const projects = useTable('projects', { enabled: seeTasks })
@@ -156,11 +164,11 @@ export default function Inicio() {
         <>
           <h2>Carga da equipe</h2>
           {load.length ? load.map((p) => (
-            <Link key={p.id} to="/configuracoes?aba=equipe" className="row">
+            <LoadRow key={p.id} to={seeTeam ? '/equipe' : null}>
               <div>{p.name}<br /><small>{p.hours ? `${p.hours}h estimadas` : 'sem estimativa de horas'}{p.cap ? ` · capacidade ${p.cap}h/semana` : ''}{p.late ? ` · ${p.late} atrasada(s)` : ''}</small></div>
               <span className={`tag ${p.over ? 'late' : ''}`}>{p.n} em aberto{p.over ? ' · sobrecarga' : ''}</span>
-            </Link>
-          )) : <p className="mu">Convide a equipe em Configurações</p>}
+            </LoadRow>
+          )) : <p className="mu">{seeTeam ? 'Cadastre a equipe em Equipe' : 'Nenhuma pessoa com tarefas em aberto'}</p>}
         </>
       )}
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { db, type Match, type Order } from './db'
 import type { OptionRow, Table, Tables } from './types'
 import { useFeedback } from '../ui/Feedback'
@@ -61,4 +62,23 @@ export function useLookup<T extends Table>(table: T) {
 /** Serviços ativos de cada cliente (sem valores). */
 export function useClientServices() {
   return useQuery({ queryKey: ['t', 'client_services'], queryFn: () => db.clientServices() })
+}
+
+/**
+ * Abre um registro vindo de link (ex.: notificação → /projetos?tarefa=<id>).
+ * Quando a lista carrega, chama `open` com o item e tira o parâmetro da URL,
+ * para não reabrir ao navegar. Se o item não existir ou não for visível, só limpa.
+ */
+export function useOpenFromUrl<T extends { id: string }>(param: string, rows: T[] | undefined, open: (row: T) => void) {
+  const [sp, setSp] = useSearchParams()
+  const id = sp.get(param)
+  useEffect(() => {
+    if (!id || !rows) return
+    const row = rows.find((r) => r.id === id)
+    if (row) open(row)
+    const next = new URLSearchParams(sp)
+    next.delete(param)
+    setSp(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, rows])
 }
