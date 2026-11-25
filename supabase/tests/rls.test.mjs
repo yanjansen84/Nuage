@@ -439,3 +439,19 @@ await as(U.ceo, async () => {
   ok(g1 >= 1 && g2 === 0, `Notificações: lembrete "vence hoje" criado uma única vez (${g1} e depois ${g2})`)
   ok((await mine(U.des)).some((x) => x.kind === 'task_due' && x.title === 'Tarefa vence hoje'), 'Notificações: lembrete de tarefa que vence hoje')
 }
+
+// ---------- Administrador corrige contrato firmado ----------
+{
+  const tenta = async (sql, params) => { try { const r = await q(sql, params); return r.affectedRows } catch (e) { return 'ERRO: ' + e.message } }
+  const item = (await q(`select id from contract_items where contract_id=$1 limit 1`, [ativo])).rows[0]?.id
+  ok(!!item, 'Correção: contrato ativo de teste tem item')
+  // financeiro (Contratos + Financeiro, sem ser admin) continua sem mexer em itens de contrato firmado
+  const r1 = await as(U.fin, () => tenta(`update contract_items set negotiated_price=999 where id=$1`, [item]))
+  ok(r1 === 0 || String(r1).startsWith('ERRO'), 'Correção: quem não é admin não altera serviços de contrato firmado')
+  ok(String(await as(U.fin, () => tenta(`update contracts set client_id=$1 where id=$2`, [outroCli, ativo]))).startsWith('ERRO'), 'Correção: quem não é admin não troca o cliente de contrato firmado')
+  // administrador corrige
+  ok(await as(U.ceo, () => tenta(`update contract_items set negotiated_price=1500 where id=$1`, [item])) === 1, 'Correção: admin altera o valor de um serviço de contrato firmado')
+  ok(await as(U.ceo, () => tenta(`update contracts set client_id=$1 where id=$2`, [outroCli, ativo])) === 1, 'Correção: admin corrige o cliente de contrato firmado')
+  ok(String(await as(U.ceo, () => tenta(`update contracts set activated_at=now() - interval '2 days' where id=$1`, [ativo]))).startsWith('ERRO'), 'Correção: nem o admin altera a data de ativação')
+  ok(await count(`select count(*) n from audit_log where table_name='contract_items' and action='update' and record_id='${item}'`) >= 1, 'Correção: a correção fica registrada na auditoria')
+}

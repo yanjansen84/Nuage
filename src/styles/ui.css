@@ -317,3 +317,22 @@ table.t tr.total-row td { background: var(--raise); }
   user-select: all; overflow-wrap: anywhere;
 }
 .user-created > .btn.ghost { justify-self: start; }
+
+/* Modo visualização (formulário aberto só para leitura até clicar em "Editar"):
+   campos legíveis, sem aparência de "desabilitado". */
+fieldset.readonly :is(input, select, textarea):disabled {
+  opacity: 1; color: var(--tx); -webkit-text-fill-color: var(--tx);
+  background: var(--raise); border-color: transparent; cursor: default;
+}
+fieldset.readonly select:disabled { background-image: none; }
+fieldset.readonly :is(input, textarea):disabled::placeholder { color: transparent; -webkit-text-fill-color: transparent; }
+
+/* Aviso do modo de correção de contrato (administrador) */
+.fix-note {
+  display: flex; gap: 12px; align-items: flex-start; margin: 0 0 16px; padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--k5) 45%, var(--ln)); border-radius: var(--r);
+  background: color-mix(in srgb, var(--k5) 10%, var(--sf)); font-size: 14px;
+}
+.fix-note svg { width: 20px; height: 20px; color: var(--k5); margin-top: 1px; }
+.fix-note div { display: grid; gap: 2px; }
+.fix-note span { color: var(--mu); font-size: 13px; }

@@ -104,7 +104,8 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
     case 'contracts': return op === 'delete' ? del('contratos') && r.status === 'rascunho' : write('contratos')
     case 'contract_items': {
       const c = rows('contracts').find((x) => x.id === r.contract_id)
-      return write('contratos') && write('financeiro') && c?.status === 'rascunho'
+      // como no banco: em rascunho com Contratos + Financeiro; contrato firmado, só o administrador (correção)
+      return admin() || (write('contratos') && write('financeiro') && c?.status === 'rascunho')
     }
     case 'payments': return write('financeiro')
     case 'bills': return op === 'delete' ? del('financeiro') : write('financeiro')

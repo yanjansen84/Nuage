@@ -1,4 +1,4 @@
-import { ChevronLeft, FileDown, Lock, Trash2 } from 'lucide-react'
+import { ChevronLeft, FileDown, Lock, ShieldAlert, Trash2, Wrench } from 'lucide-react'
 import { contractPdf } from '../lib/pdf'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -84,7 +84,10 @@ export function ContratoEditor() {
   const finance = can('financeiro')
   const canWrite = can('contratos', 'write')
   const draft = isNew || k?.status === 'rascunho'
-  const itemsEditable = draft && canWrite && can('financeiro', 'write')
+  // administrador pode abrir o "modo de correção" de um contrato já firmado (banco também permite só a ele)
+  const admin = can('configuracoes', 'write')
+  const [fixing, setFixing] = useState(false)
+  const itemsEditable = (draft && canWrite && can('financeiro', 'write')) || (fixing && admin)
 
   const [f, setF] = useState({
     client_id: sp.get('cliente') ?? '', start_date: '', min_months: '', renewal: 'automatica', notice_days: '15',
@@ -160,9 +163,11 @@ export function ContratoEditor() {
     }, 'Contrato salvo')
     if (!r || r === true) return null
     if (isNew) navigate(`/contratos/${r}`, { replace: true })
-    else setLoaded(false)
+    else { setLoaded(false); setFixing(false) }
     return r
   }
+  // sai da correção sem salvar: recarrega o que está gravado
+  const cancelFix = () => { setFixing(false); setLoaded(false) }
 
   async function setStatus(status: Contract['status'], msg: string) {
     if (!k || !(await confirm(msg, { danger: status !== 'ativo' }))) return
@@ -222,13 +227,26 @@ export function ContratoEditor() {
               <FileDown aria-hidden />{pdfBusy ? 'Gerando…' : 'Gerar PDF'}
             </button>
           )}
-          {canWrite && <button className="btn primary" onClick={save} disabled={!f.client_id}>Salvar</button>}
+          {!draft && admin && !fixing && <button className="btn" onClick={() => setFixing(true)} title="Corrigir dados de um contrato já firmado"><Wrench aria-hidden />Corrigir contrato</button>}
+          {(canWrite || fixing) && <button className="btn primary" onClick={save} disabled={!f.client_id}>{fixing ? 'Salvar correção' : 'Salvar'}</button>}
+          {fixing && <button className="btn" onClick={cancelFix}>Cancelar correção</button>}
           {k?.status === 'rascunho' && canWrite && finance && <button className="btn" onClick={() => setActivating(true)} disabled={!items.length}>Ativar contrato</button>}
           {k?.status === 'ativo' && canWrite && <button className="btn" onClick={() => setStatus('encerrado', 'Encerrar este contrato hoje?')}>Encerrar</button>}
           {k?.status === 'rascunho' && can('contratos', 'delete') && <button className="btn danger" onClick={remove}>Excluir</button>}
         </>} />
 
-      <fieldset disabled={!canWrite} style={{ border: 0, padding: 0, margin: 0 }}>
+      {fixing && (
+        <div className="fix-note" role="note">
+          <ShieldAlert aria-hidden />
+          <div>
+            <b>Modo de correção do administrador</b>
+            <span>Você pode alterar cliente, serviços, valores e condições deste contrato firmado. Tudo fica registrado na auditoria.
+              Vencimentos já gerados no Financeiro não mudam sozinhos: ajuste-os lá, se for o caso.</span>
+          </div>
+        </div>
+      )}
+
+      <fieldset disabled={!canWrite && !fixing} style={{ border: 0, padding: 0, margin: 0 }}>
         <div className="split">
           <div className="panel">
             <h3>Serviços contratados</h3>
@@ -273,7 +291,7 @@ export function ContratoEditor() {
                   <Select value="" onChange={(e) => e.target.value && addItem(e.target.value)} placeholder="Adicionar serviço…"
                     options={(services.data ?? []).filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))} aria-label="Adicionar serviço" />
                 )}
-                {!draft && <p className="money-note">Contrato ativo: os itens ficam congelados. Mudanças no catálogo não alteram este contrato.</p>}
+                {!draft && !fixing && <p className="money-note">Contrato firmado: os itens ficam congelados. Mudanças no catálogo não alteram este contrato.{admin ? ' Para corrigir um erro, use "Corrigir contrato".' : ''}</p>}
                 <dl className="kv totals">
                   <dt>Total mensal</dt><dd><b>{money(monthly)}</b></dd>
                   <dt>Pacotes e avulsos</dt><dd><b>{money(oneTime)}</b></dd>
@@ -286,7 +304,7 @@ export function ContratoEditor() {
           <div className="panel">
             <h3>Condições</h3>
             <Field label="Cliente *">
-              <Select value={f.client_id} onChange={set('client_id')} placeholder="Selecione" disabled={!isNew}
+              <Select value={f.client_id} onChange={set('client_id')} placeholder="Selecione" disabled={!isNew && !fixing}
                 options={(clients.data ?? []).map((c) => ({ value: c.id, label: c.name }))} />
             </Field>
             <div className="form-grid">

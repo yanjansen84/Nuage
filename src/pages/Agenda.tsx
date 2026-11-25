@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Pencil } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
@@ -211,10 +211,14 @@ export function EventForm({ event, date, defaultClient, onClose }: { event: Even
   const clients = useTable('clients', { order: { column: 'name' }, enabled: can('clientes') })
   const me = db.currentUserId() ?? profile?.id
   const canEdit = !event || event.created_by === me || can('configuracoes', 'write')
-  const [f, setF] = useState({
+  // compromisso existente abre só para leitura; "Editar" libera os campos
+  const [editing, setEditing] = useState(!event)
+  const initial = () => ({
     title: event?.title ?? '', date: event?.date ?? date, time: event?.time?.slice(0, 5) ?? '', profile_id: event?.profile_id ?? '',
     client_id: event?.client_id ?? defaultClient, notes: event?.notes ?? '',
   })
+  const [f, setF] = useState(initial)
+  const cancelEdit = () => { setF(initial()); setEditing(false) }
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
   const valid = f.title.trim() && f.date
 
@@ -230,13 +234,16 @@ export function EventForm({ event, date, defaultClient, onClose }: { event: Even
   }
 
   return (
-    <Modal open onClose={onClose} title={event ? 'Compromisso' : 'Novo compromisso'}
+    <Modal open onClose={onClose} title={!event ? 'Novo compromisso' : editing ? 'Editar compromisso' : 'Compromisso'}
       footer={<>
-        {canEdit && <button className="btn primary" onClick={save} disabled={!valid}>Salvar</button>}
-        <button className="btn" onClick={onClose}>Cancelar</button>
-        {event && canEdit && <button className="btn danger push" onClick={remove}>Excluir</button>}
+        {canEdit && !editing && <button className="btn primary" onClick={() => setEditing(true)}><Pencil aria-hidden />Editar</button>}
+        {canEdit && editing && <button className="btn primary" onClick={save} disabled={!valid}>Salvar</button>}
+        {event && editing
+          ? <button className="btn" onClick={cancelEdit}>Cancelar edição</button>
+          : <button className="btn" onClick={onClose}>{event ? 'Fechar' : 'Cancelar'}</button>}
+        {event && editing && canEdit && <button className="btn danger push" onClick={remove}>Excluir</button>}
       </>}>
-      <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset disabled={!canEdit || !editing} className={editing ? undefined : 'readonly'} style={{ border: 0, padding: 0, margin: 0 }}>
         <div className="form-grid">
           <Field label="Título *" full><input value={f.title} onChange={set('title')} autoFocus={!event} placeholder="Ex.: Reunião de alinhamento, captação de vídeo" /></Field>
           <Field label="Data *"><input type="date" value={f.date} onChange={set('date')} /></Field>

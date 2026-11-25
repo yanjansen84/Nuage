@@ -34,3 +34,9 @@ supabase/.branches
 
 # Build do TypeScript
 *.tsbuildinfo
+
+# Vercel CLI (vínculo local com o projeto do cliente)
+.vercel
+
+.vercel
+.env*

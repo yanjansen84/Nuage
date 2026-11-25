@@ -1,4 +1,4 @@
-import { Check, ExternalLink } from 'lucide-react'
+import { Check, ExternalLink, Pencil } from 'lucide-react'
 import { useState } from 'react'
 import { db } from '../data/db'
 import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
@@ -132,13 +132,17 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
   const me = db.currentUserId() ?? profile?.id ?? ''
   const own = scope('producao') === 'own'
   const canEdit = can('producao', 'write')
-  const [f, setF] = useState(() => ({
+  // conteúdo existente abre só para leitura; "Editar" libera os campos
+  const [editing, setEditing] = useState(!content)
+  const initial = () => ({
     title: content?.title ?? '', client_id: content?.client_id ?? defaultClient ?? '', format_id: content?.format_id ?? '',
     status_id: content?.status_id ?? '', owner_id: content?.owner_id ?? (own ? me : ''), reviewer_id: content?.reviewer_id ?? '',
     due_date: content?.due_date ?? '', publish_date: content?.publish_date ?? date ?? '', publish_time: content?.publish_time?.slice(0, 5) ?? '',
     channel: content?.channel ?? 'Instagram', objective: content?.objective ?? '', briefing: content?.briefing ?? '',
     caption: content?.caption ?? '', links: content?.links ?? '', posted_url: content?.posted_url ?? '',
-  }))
+  })
+  const [f, setF] = useState(initial)
+  const cancelEdit = () => { setF(initial()); setEditing(false) }
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
   const statusId = f.status_id || status.list[0]?.id || ''
   const formatId = f.format_id || formats.list[0]?.id || ''
@@ -166,20 +170,23 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
   const links = (f.links || '').split('\n').map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l))
 
   return (
-    <Modal open onClose={onClose} size="lg" title={content ? 'Conteúdo' : 'Novo conteúdo'}
+    <Modal open onClose={onClose} size="lg" title={!content ? 'Novo conteúdo' : editing ? 'Editar conteúdo' : 'Conteúdo'}
       footer={<>
-        {canEdit && <button className="btn primary" onClick={() => save()} disabled={!valid}>Salvar</button>}
+        {canEdit && !editing && <button className="btn primary" onClick={() => setEditing(true)}><Pencil aria-hidden />Editar</button>}
+        {canEdit && editing && <button className="btn primary" onClick={() => save()} disabled={!valid}>Salvar</button>}
         {canEdit && content && nx && !nx.is_final && <button className="btn" onClick={() => save(nx.id, `Passou para ${nx.label}`)} disabled={!valid}>Passar para {nx.label}</button>}
         {canEdit && posted && !isPosted && <button className="btn" onClick={() => save(posted.id, 'Marcado como postado')} disabled={!valid}><Check aria-hidden />Marcar como postado</button>}
         {canEdit && isPosted && content && <button className="btn" onClick={() => save(beforePosted?.id, 'Marcado como não postado')}>Desmarcar postado</button>}
-        <button className="btn" onClick={onClose}>Cancelar</button>
-        {content && can('producao', 'delete') && <button className="btn danger push" onClick={remove}>Excluir</button>}
+        {content && editing
+          ? <button className="btn" onClick={cancelEdit}>Cancelar edição</button>
+          : <button className="btn" onClick={onClose}>{content ? 'Fechar' : 'Cancelar'}</button>}
+        {content && editing && can('producao', 'delete') && <button className="btn danger push" onClick={remove}>Excluir</button>}
       </>}>
       {content?.posted_at && (
         <p className="posted-note"><Check aria-hidden />Postado em {fdt(content.posted_at)}
           {content.posted_url && /^https?:\/\//i.test(content.posted_url) && <> · <a href={content.posted_url} target="_blank" rel="noopener noreferrer">ver publicação <ExternalLink aria-hidden /></a></>}</p>
       )}
-      <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset disabled={!canEdit || !editing} className={editing ? undefined : 'readonly'} style={{ border: 0, padding: 0, margin: 0 }}>
         <div className="form-grid">
           <Field label="Título *" full><input value={f.title} onChange={set('title')} placeholder="Ex.: Reels de bastidores da cozinha" /></Field>
           {can('clientes') && <Field label="Cliente *"><Select value={f.client_id} onChange={set('client_id')} placeholder="Selecione" options={(clients.data ?? []).map((c) => ({ value: c.id, label: c.name }))} /></Field>}
