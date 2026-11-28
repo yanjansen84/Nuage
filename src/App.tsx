@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useLocation } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { useAuth } from './lib/auth'
 import { accessOf, canAccess, type Access } from './routes'
@@ -18,6 +18,8 @@ const Financeiro = lazy(() => import('./pages/Financeiro'))
 const Projetos = lazy(() => import('./pages/Projetos'))
 const Agenda = lazy(() => import('./pages/Agenda'))
 const Conteudo = lazy(() => import('./pages/Conteudo'))
+const Estrategia = lazy(() => import('./pages/Estrategia'))
+const AprovacaoPublica = lazy(() => import('./pages/AprovacaoPublica'))
 const Configuracoes = lazy(() => import('./pages/Configuracoes'))
 const Equipe = lazy(() => import('./pages/Equipe'))
 
@@ -30,8 +32,18 @@ function Guard({ to, children }: { to: string | Access; children: ReactNode }) {
 
 export default function App() {
   const { status, needsPassword } = useAuth()
+  const { pathname } = useLocation()
 
   if (status === 'unconfigured') return <Unconfigured />
+  // link público de aprovação de conteúdo: funciona mesmo sem usuário logado
+  if (pathname.startsWith('/aprovar/')) {
+    return (
+      <Routes>
+        <Route path="/aprovar/:token" element={<Suspense fallback={<Loading />}><AprovacaoPublica /></Suspense>} />
+      </Routes>
+    )
+  }
+
   if (status === 'loading') return <Loading />
   if (status === 'signed-out') return <Login />
   if (needsPassword) return <DefinirSenha />
@@ -50,6 +62,7 @@ export default function App() {
         <Route path="financeiro" element={<Guard to="/financeiro"><Financeiro /></Guard>} />
         <Route path="projetos" element={<Guard to="/projetos"><Projetos /></Guard>} />
         <Route path="conteudo" element={<Guard to="/conteudo"><Conteudo /></Guard>} />
+        <Route path="estrategia" element={<Guard to="/estrategia"><Estrategia /></Guard>} />
         <Route path="agenda" element={<Guard to="/agenda"><Agenda /></Guard>} />
         <Route path="equipe" element={<Guard to="/equipe"><Equipe /></Guard>} />
         <Route path="configuracoes" element={<Guard to="/configuracoes"><Configuracoes /></Guard>} />

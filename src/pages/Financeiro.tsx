@@ -1,8 +1,9 @@
-import { ChevronLeft, ChevronRight, FileDown } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileDown } from 'lucide-react'
 import { statementPdf } from '../lib/pdf'
+import { downloadCsv } from '../lib/csv'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { db } from '../data/db'
+import { db, traduzErro } from '../data/db'
 import { useRun, useTable } from '../data/hooks'
 import type { Bill, Payment } from '../data/types'
 import { useAuth } from '../lib/auth'
@@ -32,8 +33,13 @@ export default function Financeiro() {
   const [ym, setYm] = useState(today().slice(0, 7))
   const [editing, setEditing] = useState<Payment | 'new' | null>(null)
   // a aba pode vir pelo link (ex.: notificação de contas → /financeiro?aba=pagar)
-  const [sp] = useSearchParams()
-  const [tab, setTab] = useState<'mes' | 'historico' | 'pagar'>(() => (sp.get('aba') === 'pagar' ? 'pagar' : sp.get('aba') === 'historico' ? 'historico' : 'mes'))
+  const [sp, setSp] = useSearchParams()
+  const tab: 'mes' | 'historico' | 'pagar' = sp.get('aba') === 'pagar' ? 'pagar' : sp.get('aba') === 'historico' ? 'historico' : 'mes'
+  const setTab = (t: 'mes' | 'historico' | 'pagar') => {
+    const n = new URLSearchParams(sp)
+    if (t === 'mes') n.delete('aba'); else n.set('aba', t)
+    setSp(n, { replace: true })
+  }
   const [billEditing, setBillEditing] = useState<Bill | 'new' | null>(null)
 
   const P = payments.data ?? []
@@ -109,10 +115,21 @@ export default function Financeiro() {
         <input type="month" value={ym} onChange={(e) => e.target.value && setYm(e.target.value)} aria-label="Mês" />
         <button className="btn icon" aria-label="Próximo mês" onClick={() => setYm(addMonths(ym + '-15', 1).slice(0, 7))}><ChevronRight aria-hidden /></button>
         <span className="mu">{label}</span>
+        <span className="spacer" />
+        {tab === 'mes' && inMonth.length > 0 && (
+          <button className="btn" onClick={() => downloadCsv(
+            `recebimentos-${ym}.csv`,
+            ['Vencimento', 'Cliente', 'Descrição', 'Valor', 'Situação', 'Pago em', 'Método'],
+            inMonth.map((p) => [
+              p.due_date, clientOf(p.contract_id)?.name, p.notes, p.amount,
+              PAY_STATUS[payState(p)].label, p.paid_at, p.method ? PAY_METHOD[p.method] : '',
+            ]),
+          )}><Download aria-hidden />Exportar CSV</button>
+        )}
       </div>
 
       {tab === 'pagar' ? (
-        <ContasPagar ym={ym} recebidoMes={recebido} editing={billEditing} setEditing={setBillEditing} />
+        <ContasPagar ym={ym} recebidoMes={recebido} editing={billEditing} setEditing={setBillEditing} onGoMonth={setYm} />
       ) : (<>
 
       <div className="kpis">
@@ -124,7 +141,9 @@ export default function Financeiro() {
       <p className="money-note">Os três indicadores medem coisas diferentes e não devem ser somados</p>
 
       <h2>Vencimentos de {monthName}</h2>
-      {payments.isLoading ? <Loading /> : !inMonth.length ? (
+      {payments.isLoading ? <Loading /> : payments.isError ? (
+        <Empty>{traduzErro((payments.error as Error)?.message ?? 'Não foi possível carregar os lançamentos.')}</Empty>
+      ) : !inMonth.length ? (
         <Empty action={can('financeiro', 'write') && active.length > 0 && <button className="btn" onClick={generate}>Gerar a partir dos contratos</button>}>
           Nenhum vencimento neste mês.
         </Empty>
@@ -310,6 +329,16 @@ function Historico({ payments, clientName, clientIdOf, onOpen, onGoMonth }: {
         <Select value={state} onChange={(e) => { setState(e.target.value); reset() }} placeholder="Todas as situações" aria-label="Situação"
           options={Object.entries(PAY_STATUS).map(([v, s]) => ({ value: v, label: s.label }))} />
         <span className="spacer" />
+        {L.length > 0 && (
+          <button className="btn" onClick={() => downloadCsv(
+            `historico-recebimentos-${today()}.csv`,
+            ['Vencimento', 'Cliente', 'Descrição', 'Valor', 'Situação', 'Pago em', 'Método'],
+            L.map((p) => [
+              p.due_date, clientName(p.contract_id), p.notes, p.amount,
+              PAY_STATUS[payState(p)].label, p.paid_at, p.method ? PAY_METHOD[p.method] : '',
+            ]),
+          )}><Download aria-hidden />Exportar CSV</button>
+        )}
         <button className="btn" onClick={exportPdf} disabled={!client || !L.length || pdfBusy}
           title={!client ? 'Escolha um cliente para gerar o extrato' : 'Baixar o extrato deste cliente em PDF'}>
           <FileDown aria-hidden />{pdfBusy ? 'Gerando…' : 'PDF do cliente'}

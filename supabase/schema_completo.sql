@@ -2239,3 +2239,797 @@ create policy "alterar itens de contrato" on public.contract_items for all to au
   );
 
 revoke execute on function public.guard_contract_status() from public, anon, authenticated;
+
+-- =========================================
+-- 20261119001400_pagamentos_e_lembretes_contratos.sql
+-- =========================================
+-- =====================================================================
+-- Na.Nu · Integridade de recebimentos e lembretes de contratos
+-- =====================================================================
+
+update public.payments
+   set paid_at = coalesce(paid_at, due_date, current_date)
+ where status = 'pago' and paid_at is null;
+
+update public.payments
+   set paid_at = null
+ where status <> 'pago' and paid_at is not null;
+
+alter table public.payments
+  drop constraint if exists payments_paid_at_check;
+
+alter table public.payments
+  add constraint payments_paid_at_check check ((status = 'pago') = (paid_at is not null));
+
+create or replace function public.generate_my_notifications() returns int
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me uuid := auth.uid();
+  d date := current_date;
+  r record;
+  v_count int; v_sum numeric;
+  v_before int; v_after int;
+begin
+  if me is null or not exists (select 1 from profiles where id = me and active) then return 0; end if;
+  select count(*) into v_before from notifications where user_id = me;
+
+  -- limpeza: lidas há mais de 60 dias e qualquer uma com mais de 180
+  delete from notifications where user_id = me
+    and ((read_at is not null and read_at < now() - interval '60 days') or created_at < now() - interval '180 days');
+
+  if public.user_can_read(me, 'projetos') then
+    for r in
+      select t.id, t.title, t.due_date from tasks t
+      where t.done_at is null and t.due_date is not null and t.due_date <= d + 1
+        and (t.owner_id = me or exists (select 1 from task_collaborators c where c.task_id = t.id and c.profile_id = me))
+    loop
+      if r.due_date < d then
+        perform notify(me, 'task_late', 'Tarefa atrasada', r.title || ' · venceu ' || to_char(r.due_date, 'DD/MM'),
+          '/projetos?tarefa=' || r.id, 'task_late:' || r.id || ':' || r.due_date, null, true);
+      elsif r.due_date = d then
+        perform notify(me, 'task_due', 'Tarefa vence hoje', r.title, '/projetos?tarefa=' || r.id,
+          'task_due:' || r.id || ':' || r.due_date, null, true);
+      else
+        perform notify(me, 'task_due', 'Tarefa vence amanhã', r.title, '/projetos?tarefa=' || r.id,
+          'task_due_soon:' || r.id || ':' || r.due_date, null, true);
+      end if;
+    end loop;
+  end if;
+
+  if public.user_can_read(me, 'producao') then
+    for r in
+      select c.id, c.title, c.publish_time from contents c
+      where c.posted_at is null and c.publish_date = d and (c.owner_id = me or c.reviewer_id = me)
+    loop
+      perform notify(me, 'content_publish', 'Publicação prevista para hoje',
+        r.title || coalesce(' · ' || to_char(r.publish_time, 'HH24:MI'), ''), '/conteudo?conteudo=' || r.id,
+        'content_publish:' || r.id || ':' || d, null, true);
+    end loop;
+  end if;
+
+  if public.user_can_read(me, 'crm') then
+    for r in
+      select l.id, l.name, l.follow_up, l.next_action from leads l
+      join options o on o.id = l.stage_id
+      where l.owner_id = me and l.follow_up is not null and l.follow_up <= d and not o.is_final
+    loop
+      perform notify(me, 'lead_followup', case when r.follow_up < d then 'Retorno de lead atrasado' else 'Retorno de lead hoje' end,
+        r.name || coalesce(' · ' || r.next_action, ''), '/comercial?lead=' || r.id,
+        'lead_followup:' || r.id || ':' || r.follow_up, null, true);
+    end loop;
+  end if;
+
+  if public.user_can_read(me, 'contratos') then
+    for r in
+      select k.id, cl.name as client_name,
+             (k.start_date + make_interval(months => k.min_months))::date as min_end,
+             k.notice_days, k.renewal
+      from contracts k
+      join clients cl on cl.id = k.client_id
+      where k.status = 'ativo'
+        and k.start_date is not null
+        and k.min_months is not null
+        and (k.start_date + make_interval(months => k.min_months))::date >= d - 30
+        and (
+          (k.start_date + make_interval(months => k.min_months))::date <= d + 30
+          or ((k.start_date + make_interval(months => k.min_months))::date - coalesce(k.notice_days, 0)) <= d + 15
+        )
+    loop
+      perform notify(
+        me,
+        'contract_ending',
+        case when r.min_end < d then 'Prazo mínimo de contrato vencido' else 'Contrato perto do fim do prazo mínimo' end,
+        r.client_name || ' · até ' || to_char(r.min_end, 'DD/MM/YYYY') ||
+          case when r.notice_days is not null then ' (aviso ' || r.notice_days || 'd)' else '' end,
+        '/contratos/' || r.id,
+        'contract_ending:' || r.id || ':' || r.min_end,
+        null,
+        true
+      );
+    end loop;
+  end if;
+
+  if public.user_can_read(me, 'financeiro') then
+    select count(*), coalesce(sum(amount), 0) into v_count, v_sum from payments
+      where status = 'previsto' and due_date < d;
+    if v_count > 0 then
+      perform notify(me, 'pay_late', v_count || ' recebimento(s) em atraso',
+        'Total de R$ ' || to_char(v_sum, 'FM999G999G990D00'), '/financeiro', 'pay_late:' || d, null, true);
+    end if;
+    select count(*), coalesce(sum(amount), 0) into v_count, v_sum from bills
+      where status = 'aberto' and due_date <= d + 3;
+    if v_count > 0 then
+      perform notify(me, 'bills_due', v_count || ' conta(s) a pagar vencendo ou vencida(s)',
+        'Total de R$ ' || to_char(v_sum, 'FM999G999G990D00') || ' até ' || to_char(d + 3, 'DD/MM'),
+        '/financeiro?aba=pagar', 'bills_due:' || d, null, true);
+    end if;
+  end if;
+
+  select count(*) into v_after from notifications where user_id = me;
+  return greatest(v_after - v_before, 0);
+end $$;
+
+-- =========================================
+-- 20261119001500_tarefas_recorrentes.sql
+-- =========================================
+-- =====================================================================
+-- Na.Nu · Fase 2 · Tarefas recorrentes automáticas
+-- Ao concluir uma tarefa raiz com `recurrence` definido
+-- ({"freq":"daily"|"weekly"|"monthly"}), o banco cria automaticamente a
+-- próxima ocorrência com datas deslocadas, mantendo equipe e checklist.
+-- =====================================================================
+
+alter table public.tasks
+  add column if not exists recurrence_source_id uuid references public.tasks(id) on delete set null;
+
+create index if not exists tasks_recurrence_source_idx
+  on public.tasks (recurrence_source_id)
+  where recurrence_source_id is not null;
+
+create or replace function public.generate_next_recurring_task() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_freq   text;
+  v_step   interval;
+  v_status uuid;
+  v_next   uuid;
+  v_start  date;
+  v_due    date;
+begin
+  -- dispara apenas na transição de aberta -> concluída em tarefa raiz recorrente
+  if new.done_at is null or old.done_at is not null then return null; end if;
+  if new.parent_id is not null or new.recurrence is null then return null; end if;
+
+  v_freq := new.recurrence->>'freq';
+  if v_freq not in ('daily', 'weekly', 'monthly') then return null; end if;
+
+  -- idempotente: se a próxima ocorrência já foi criada (ex.: reaberta e concluída), não duplica
+  if exists (select 1 from public.tasks where recurrence_source_id = new.id) then
+    return null;
+  end if;
+
+  v_step := case v_freq
+    when 'daily'   then interval '1 day'
+    when 'weekly'  then interval '7 days'
+    else                interval '1 month'
+  end;
+
+  v_start := case when new.start_date is not null then (new.start_date + v_step)::date else current_date end;
+  v_due   := case when new.due_date   is not null then (new.due_date   + v_step)::date else null end;
+
+  select id into v_status
+    from public.options
+   where set_key = 'task_status' and not is_final and active
+   order by sort
+   limit 1;
+
+  insert into public.tasks (
+    project_id, client_id, title, description, owner_id, status_id, priority,
+    start_date, due_date, effort_hours, recurrence, recurrence_source_id, created_by
+  )
+  values (
+    new.project_id, new.client_id, new.title, new.description, new.owner_id, v_status, new.priority,
+    v_start, v_due, new.effort_hours, new.recurrence, new.id, coalesce(auth.uid(), new.created_by)
+  )
+  returning id into v_next;
+
+  insert into public.task_collaborators (task_id, profile_id)
+  select v_next, profile_id
+    from public.task_collaborators
+   where task_id = new.id
+  on conflict do nothing;
+
+  insert into public.task_checklist (task_id, title, done, sort)
+  select v_next, title, false, sort
+    from public.task_checklist
+   where task_id = new.id;
+
+  return null;
+end $$;
+
+drop trigger if exists tasks_recurrence_next on public.tasks;
+create trigger tasks_recurrence_next after update on public.tasks
+for each row execute function public.generate_next_recurring_task();
+
+revoke execute on function public.generate_next_recurring_task() from public, anon, authenticated;
+
+
+-- =========================================
+-- 20261119001600_briefing_campanhas_estrategia.sql
+-- =========================================
+-- =====================================================================
+-- Na.Nu · Fase 2 · Briefing do cliente, Campanhas e Estratégia
+-- 1. client_briefings: briefing estruturado por cliente (módulo clientes).
+-- 2. campaigns + campaign_budgets: campanhas por cliente com orçamento
+--    financeiro isolado em tabela própria (módulo financeiro).
+-- 3. strategies: módulo Estratégia (escopo own/all, comentários e aviso).
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Briefing do cliente
+-- ---------------------------------------------------------------------
+create table public.client_briefings (
+  client_id        uuid primary key references public.clients(id) on delete cascade,
+  audience         text,
+  tone_of_voice    text,
+  differentials    text,
+  competitors      text,
+  references_links text,
+  restrictions     text,
+  notes            text,
+  updated_by       uuid references public.profiles(id) default auth.uid(),
+  updated_at       timestamptz not null default now()
+);
+
+create trigger client_briefings_touch before update on public.client_briefings
+for each row execute function public.touch_updated_at();
+create trigger client_briefings_audit after insert or update or delete on public.client_briefings
+for each row execute function public.audit();
+
+alter table public.client_briefings enable row level security;
+create policy "ler briefings" on public.client_briefings for select to authenticated
+  using (public.can_read('clientes'));
+create policy "alterar briefings" on public.client_briefings for insert to authenticated
+  with check (public.can_write('clientes'));
+create policy "editar briefings" on public.client_briefings for update to authenticated
+  using (public.can_write('clientes')) with check (public.can_write('clientes'));
+create policy "excluir briefings" on public.client_briefings for delete to authenticated
+  using (public.can_delete('clientes'));
+
+revoke all on public.client_briefings from anon;
+grant select, insert, update, delete on public.client_briefings to authenticated;
+grant all on public.client_briefings to service_role;
+
+-- ---------------------------------------------------------------------
+-- 2. Campanhas (orçamento isolado para o módulo Financeiro)
+-- ---------------------------------------------------------------------
+insert into public.options (set_key, label, color, sort, is_final) values
+  ('campaign_status', 'Planejada',  '#2f80ed', 1, false),
+  ('campaign_status', 'Ativa',      '#2e9e6a', 2, false),
+  ('campaign_status', 'Pausada',    '#b97d00', 3, false),
+  ('campaign_status', 'Encerrada',  '#55555f', 4, true)
+on conflict (set_key, label) do nothing;
+
+create table public.campaigns (
+  id         uuid primary key default gen_random_uuid(),
+  client_id  uuid not null references public.clients(id) on delete cascade,
+  name       text not null check (char_length(name) between 1 and 200),
+  channel    text,
+  objective  text,
+  status_id  uuid references public.options(id),
+  start_date date,
+  end_date   date,
+  owner_id   uuid references public.profiles(id),
+  links      text,
+  notes      text,
+  created_by uuid references public.profiles(id) default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index campaigns_client_idx on public.campaigns (client_id);
+
+create table public.campaign_budgets (
+  campaign_id    uuid primary key references public.campaigns(id) on delete cascade,
+  monthly_budget numeric(12,2) check (monthly_budget >= 0),
+  spent_amount   numeric(12,2) check (spent_amount >= 0),
+  updated_at     timestamptz not null default now()
+);
+
+create trigger campaigns_touch before update on public.campaigns
+for each row execute function public.touch_updated_at();
+create trigger campaigns_audit after insert or update or delete on public.campaigns
+for each row execute function public.audit();
+
+create trigger campaign_budgets_touch before update on public.campaign_budgets
+for each row execute function public.touch_updated_at();
+create trigger campaign_budgets_audit after insert or update or delete on public.campaign_budgets
+for each row execute function public.audit();
+
+alter table public.campaigns enable row level security;
+alter table public.campaign_budgets enable row level security;
+
+create policy "ler campanhas" on public.campaigns for select to authenticated
+  using (public.can_read('clientes'));
+create policy "criar campanhas" on public.campaigns for insert to authenticated
+  with check (public.can_write('clientes'));
+create policy "editar campanhas" on public.campaigns for update to authenticated
+  using (public.can_write('clientes')) with check (public.can_write('clientes'));
+create policy "excluir campanhas" on public.campaigns for delete to authenticated
+  using (public.can_delete('clientes'));
+
+create policy "financeiro lê verba de campanha" on public.campaign_budgets for select to authenticated
+  using (public.can_read('financeiro') and public.can_read('clientes'));
+create policy "financeiro altera verba de campanha" on public.campaign_budgets for all to authenticated
+  using (public.can_write('financeiro') and public.can_write('clientes'))
+  with check (public.can_write('financeiro') and public.can_write('clientes'));
+
+revoke all on public.campaigns, public.campaign_budgets from anon;
+grant select, insert, update, delete on public.campaigns, public.campaign_budgets to authenticated;
+grant all on public.campaigns, public.campaign_budgets to service_role;
+
+-- ---------------------------------------------------------------------
+-- 3. Módulo Estratégia
+-- ---------------------------------------------------------------------
+create table public.strategies (
+  id          uuid primary key default gen_random_uuid(),
+  client_id   uuid references public.clients(id) on delete set null,
+  title       text not null check (char_length(title) between 1 and 200),
+  status      text not null default 'rascunho' check (status in ('rascunho','ativo','arquivado')),
+  start_date  date,
+  end_date    date,
+  positioning text,
+  personas    text,
+  pillars     text[] not null default '{}',
+  channels    text,
+  goals       text,
+  kpis        text,
+  notes       text,
+  owner_id    uuid references public.profiles(id),
+  created_by  uuid references public.profiles(id) default auth.uid(),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index strategies_client_idx on public.strategies (client_id);
+
+create or replace function public.is_strategy_mine(s public.strategies) returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select s.owner_id = auth.uid() or s.created_by = auth.uid()
+$$;
+revoke execute on function public.is_strategy_mine(public.strategies) from public, anon;
+
+create trigger strategies_touch before update on public.strategies
+for each row execute function public.touch_updated_at();
+create trigger strategies_audit after insert or update or delete on public.strategies
+for each row execute function public.audit();
+
+create or replace function public.notify_strategy() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if new.owner_id is not null and (tg_op = 'INSERT' or new.owner_id is distinct from old.owner_id) then
+    perform notify(
+      new.owner_id,
+      'strategy_assigned',
+      public.actor_name() || ' deixou uma estratégia com você',
+      new.title,
+      '/estrategia?estrategia=' || new.id,
+      'strategy_assigned:' || new.id || ':' || new.owner_id,
+      'estrategia'
+    );
+  end if;
+  return null;
+end $$;
+create trigger strategies_notify after insert or update of owner_id on public.strategies
+for each row execute function public.notify_strategy();
+revoke execute on function public.notify_strategy() from public, anon, authenticated;
+
+alter table public.strategies enable row level security;
+create policy "ler estratégias" on public.strategies for select to authenticated
+  using (public.can_read_all('estrategia') or (public.can_read('estrategia') and public.is_strategy_mine(strategies)));
+create policy "criar estratégias" on public.strategies for insert to authenticated
+  with check (public.can_write_all('estrategia') or (public.can_write('estrategia') and coalesce(owner_id, auth.uid()) = auth.uid()));
+create policy "editar estratégias" on public.strategies for update to authenticated
+  using (public.can_write_all('estrategia') or (public.can_write('estrategia') and public.is_strategy_mine(strategies)))
+  with check (public.can_write('estrategia'));
+create policy "excluir estratégias" on public.strategies for delete to authenticated
+  using (public.can_delete('estrategia') and (public.can_read_all('estrategia') or created_by = auth.uid()));
+
+revoke all on public.strategies from anon;
+grant select, insert, update, delete on public.strategies to authenticated;
+grant all on public.strategies to service_role;
+
+-- Comentários e notificações também em estratégias
+alter table public.comments drop constraint if exists comments_entity_check;
+alter table public.comments add constraint comments_entity_check
+  check (entity in ('task','project','lead','client','content','strategy'));
+
+drop policy if exists "ler comentários" on public.comments;
+create policy "ler comentários" on public.comments for select to authenticated using (
+  case entity
+    when 'task'     then exists (select 1 from public.tasks      x where x.id = entity_id)
+    when 'project'  then exists (select 1 from public.projects   x where x.id = entity_id)
+    when 'lead'     then exists (select 1 from public.leads      x where x.id = entity_id)
+    when 'client'   then exists (select 1 from public.clients    x where x.id = entity_id)
+    when 'content'  then exists (select 1 from public.contents   x where x.id = entity_id)
+    when 'strategy' then exists (select 1 from public.strategies x where x.id = entity_id)
+  end
+);
+
+drop policy if exists "comentar" on public.comments;
+create policy "comentar" on public.comments for insert to authenticated with check (
+  author_id = auth.uid()
+  and public.is_active_user()
+  and (
+    case entity
+      when 'task'     then exists (select 1 from public.tasks      x where x.id = entity_id)
+      when 'project'  then exists (select 1 from public.projects   x where x.id = entity_id)
+      when 'lead'     then exists (select 1 from public.leads      x where x.id = entity_id)
+      when 'client'   then exists (select 1 from public.clients    x where x.id = entity_id)
+      when 'content'  then exists (select 1 from public.contents   x where x.id = entity_id)
+      when 'strategy' then exists (select 1 from public.strategies x where x.id = entity_id)
+    end
+  )
+);
+
+create or replace function public.notify_comment() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_title text; v_link text; v_module text;
+  v_people uuid[] := '{}';
+  v_body text := public.actor_name() || ': ' || left(regexp_replace(new.body, '\s+', ' ', 'g'), 160);
+  p uuid;
+begin
+  case new.entity
+    when 'task' then
+      select t.title, array_remove(array[t.owner_id, t.created_by], null) || coalesce(array_agg(c.profile_id) filter (where c.profile_id is not null), '{}')
+        into v_title, v_people
+        from tasks t left join task_collaborators c on c.task_id = t.id where t.id = new.entity_id group by t.id;
+      v_link := '/projetos?tarefa=' || new.entity_id; v_module := 'projetos';
+    when 'project' then
+      select pr.name, array_remove(array[pr.owner_id, pr.created_by], null) || coalesce(array_agg(m.profile_id) filter (where m.profile_id is not null), '{}')
+        into v_title, v_people
+        from projects pr left join project_members m on m.project_id = pr.id where pr.id = new.entity_id group by pr.id;
+      v_link := '/projetos?aba=projetos&projeto=' || new.entity_id; v_module := 'projetos';
+    when 'lead' then
+      select name, array_remove(array[owner_id, created_by], null) into v_title, v_people from leads where id = new.entity_id;
+      v_link := '/comercial?lead=' || new.entity_id; v_module := 'crm';
+    when 'client' then
+      select name, array_remove(array[created_by], null) into v_title, v_people from clients where id = new.entity_id;
+      v_link := '/clientes/' || new.entity_id; v_module := 'clientes';
+    when 'content' then
+      select title, array_remove(array[owner_id, reviewer_id, created_by], null) into v_title, v_people from contents where id = new.entity_id;
+      v_link := '/conteudo?conteudo=' || new.entity_id; v_module := 'producao';
+    when 'strategy' then
+      select title, array_remove(array[owner_id, created_by], null) into v_title, v_people from strategies where id = new.entity_id;
+      v_link := '/estrategia?estrategia=' || new.entity_id; v_module := 'estrategia';
+    else return null;
+  end case;
+
+  foreach p in array coalesce((select array_agg(distinct x) from unnest(v_people) x), '{}'::uuid[]) loop
+    perform notify(p, 'comment', 'Novo comentário em ' || coalesce(v_title, 'um registro'), v_body, v_link,
+      'comment:' || new.id || ':' || p, v_module);
+  end loop;
+  return null;
+end $$;
+
+
+-- =========================================
+-- 20261119001700_aprovacao_publica_e_push.sql
+-- =========================================
+-- =====================================================================
+-- Na.Nu · Fase 2 · Aprovação externa de conteúdo por link + Web Push
+-- 1. content_approval_links + content_approvals: link público com token
+--    para o cliente aprovar ou pedir ajustes sem precisar de login.
+--    `anon` nunca acessa `contents` diretamente: apenas duas RPCs
+--    controladas (get_content_for_approval / submit_content_approval).
+-- 2. push_subscriptions: inscrições Web Push do usuário logado.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Aprovação externa de conteúdo
+-- ---------------------------------------------------------------------
+create table public.content_approval_links (
+  id         uuid primary key default gen_random_uuid(),
+  content_id uuid not null references public.contents(id) on delete cascade,
+  token      text not null unique default replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
+  expires_at timestamptz not null default (now() + interval '14 days'),
+  revoked_at timestamptz,
+  created_by uuid references public.profiles(id) default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index content_approval_links_content_idx on public.content_approval_links (content_id, created_at desc);
+
+create table public.content_approvals (
+  id            uuid primary key default gen_random_uuid(),
+  link_id       uuid not null references public.content_approval_links(id) on delete cascade,
+  content_id    uuid not null references public.contents(id) on delete cascade,
+  decision      text not null check (decision in ('aprovado','ajustes')),
+  reviewer_name text not null check (char_length(reviewer_name) between 1 and 120),
+  comment       text check (char_length(comment) <= 2000),
+  created_at    timestamptz not null default now()
+);
+create unique index content_approvals_link_uidx on public.content_approvals (link_id);
+create index content_approvals_content_idx on public.content_approvals (content_id, created_at desc);
+
+create trigger content_approval_links_audit after insert or update or delete on public.content_approval_links
+for each row execute function public.audit();
+create trigger content_approvals_audit after insert or update or delete on public.content_approvals
+for each row execute function public.audit();
+
+alter table public.content_approval_links enable row level security;
+alter table public.content_approvals enable row level security;
+
+create policy "ler links de aprovação" on public.content_approval_links for select to authenticated
+  using (public.can_read('producao') and exists (select 1 from public.contents c where c.id = content_id));
+create policy "criar links de aprovação" on public.content_approval_links for insert to authenticated
+  with check (public.can_write('producao') and exists (select 1 from public.contents c where c.id = content_id));
+create policy "revogar links de aprovação" on public.content_approval_links for update to authenticated
+  using (public.can_write('producao') and exists (select 1 from public.contents c where c.id = content_id))
+  with check (public.can_write('producao'));
+create policy "excluir links de aprovação" on public.content_approval_links for delete to authenticated
+  using (public.can_delete('producao') and exists (select 1 from public.contents c where c.id = content_id));
+
+create policy "ler respostas de aprovação" on public.content_approvals for select to authenticated
+  using (public.can_read('producao') and exists (select 1 from public.contents c where c.id = content_id));
+
+revoke all on public.content_approval_links, public.content_approvals from anon;
+grant select, insert, update, delete on public.content_approval_links to authenticated;
+grant select on public.content_approvals to authenticated;
+grant all on public.content_approval_links, public.content_approvals to service_role;
+
+-- Leitura pública controlada pelo token (não expõe dados internos nem permite listar)
+create or replace function public.get_content_for_approval(p_token text)
+returns table(
+  content_id    uuid,
+  title         text,
+  client_name   text,
+  format_label  text,
+  status_label  text,
+  status_color  text,
+  channel       text,
+  objective     text,
+  caption       text,
+  links         text,
+  publish_date  date,
+  publish_time  time,
+  expires_at    timestamptz,
+  decision      text,
+  reviewer_name text,
+  feedback      text,
+  decided_at    timestamptz
+)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select c.id, c.title, cl.name, fmt.label, st.label, st.color,
+         c.channel, c.objective, c.caption, c.links, c.publish_date, c.publish_time,
+         l.expires_at, a.decision, a.reviewer_name, a.comment, a.created_at
+  from public.content_approval_links l
+  join public.contents c on c.id = l.content_id
+  left join public.clients cl on cl.id = c.client_id
+  left join public.options fmt on fmt.id = c.format_id
+  left join public.options st on st.id = c.status_id
+  left join public.content_approvals a on a.link_id = l.id
+  where l.token = trim(p_token)
+    and l.revoked_at is null
+    and l.expires_at > now()
+$$;
+
+-- Resposta pública de aprovação/ajustes pelo token
+create or replace function public.submit_content_approval(
+  p_token         text,
+  p_decision      text,
+  p_reviewer_name text,
+  p_comment       text default null
+) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_link    public.content_approval_links%rowtype;
+  v_content public.contents%rowtype;
+  v_name    text := trim(coalesce(p_reviewer_name, ''));
+  v_comment text := nullif(trim(coalesce(p_comment, '')), '');
+  v_status  uuid;
+  v_kind    text;
+  v_title   text;
+begin
+  if p_decision not in ('aprovado', 'ajustes') then
+    raise exception 'Decisão inválida';
+  end if;
+  if char_length(v_name) < 1 or char_length(v_name) > 120 then
+    raise exception 'Informe seu nome';
+  end if;
+  if p_decision = 'ajustes' and v_comment is null then
+    raise exception 'Descreva os ajustes desejados';
+  end if;
+
+  select * into v_link
+    from public.content_approval_links
+   where token = trim(coalesce(p_token, ''))
+   for update;
+
+  if not found or v_link.revoked_at is not null or v_link.expires_at <= now() then
+    raise exception 'Link de aprovação inválido ou expirado';
+  end if;
+  if exists (select 1 from public.content_approvals where link_id = v_link.id) then
+    raise exception 'Este link de aprovação já foi respondido';
+  end if;
+
+  select * into v_content from public.contents where id = v_link.content_id;
+  if not found then
+    raise exception 'Conteúdo não encontrado';
+  end if;
+
+  insert into public.content_approvals (link_id, content_id, decision, reviewer_name, comment)
+  values (v_link.id, v_content.id, p_decision, v_name, v_comment);
+
+  select id into v_status
+    from public.options
+   where set_key = 'content_status'
+     and label = case when p_decision = 'aprovado' then 'Aprovado' else 'Ajustes' end
+   limit 1;
+
+  if v_status is not null and v_status is distinct from v_content.status_id then
+    update public.contents set status_id = v_status where id = v_content.id;
+  end if;
+
+  v_kind  := case when p_decision = 'aprovado' then 'content_approved' else 'content_changes' end;
+  v_title := case when p_decision = 'aprovado'
+    then v_name || ' aprovou: ' || v_content.title
+    else v_name || ' pediu ajustes em ' || v_content.title
+  end;
+
+  perform notify(
+    v_content.owner_id,
+    v_kind,
+    v_title,
+    coalesce(v_comment, 'Aprovado pelo link externo'),
+    '/conteudo?conteudo=' || v_content.id,
+    v_kind || ':' || v_link.id || ':' || coalesce(v_content.owner_id::text, ''),
+    'producao',
+    true
+  );
+  if v_content.reviewer_id is distinct from v_content.owner_id then
+    perform notify(
+      v_content.reviewer_id,
+      v_kind,
+      v_title,
+      coalesce(v_comment, 'Aprovado pelo link externo'),
+      '/conteudo?conteudo=' || v_content.id,
+      v_kind || ':' || v_link.id || ':' || coalesce(v_content.reviewer_id::text, ''),
+      'producao',
+      true
+    );
+  end if;
+end $$;
+
+revoke execute on function public.get_content_for_approval(text), public.submit_content_approval(text, text, text, text) from public;
+grant execute on function public.get_content_for_approval(text), public.submit_content_approval(text, text, text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 2. Inscrições Web Push (PWA em segundo plano)
+-- ---------------------------------------------------------------------
+create table public.push_subscriptions (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references public.profiles(id) on delete cascade default auth.uid(),
+  endpoint   text not null,
+  p256dh     text not null,
+  auth       text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, endpoint)
+);
+
+alter table public.push_subscriptions enable row level security;
+create policy "gerenciar próprias inscrições push" on public.push_subscriptions for all to authenticated
+  using (user_id = auth.uid() and public.is_active_user())
+  with check (user_id = auth.uid() and public.is_active_user());
+
+revoke all on public.push_subscriptions from anon;
+grant select, insert, update, delete on public.push_subscriptions to authenticated;
+grant all on public.push_subscriptions to service_role;
+
+
+-- =====================================================================
+-- Na.Nu · Dados jurídicos de clientes e cláusulas completas de contrato
+-- =====================================================================
+
+alter table public.clients
+  add column if not exists legal_name     text,
+  add column if not exists document       text,
+  add column if not exists address        text,
+  add column if not exists legal_rep_name text,
+  add column if not exists legal_rep_cpf  text;
+
+alter table public.contracts
+  add column if not exists templates            text[] not null default array['agencia']::text[],
+  add column if not exists platforms            text,
+  add column if not exists publisher            text,
+  add column if not exists video_quantity       int,
+  add column if not exists shooting_location    text,
+  add column if not exists first_payment_date   date,
+  add column if not exists billing_periodicity  text,
+  add column if not exists portfolio_authorized boolean not null default true,
+  add column if not exists forum_city           text not null default 'São Luís - MA';
+
+alter table public.contracts drop constraint if exists contracts_notice_days_check;
+alter table public.contracts
+  add constraint contracts_notice_days_check check (notice_days in (5, 10, 15, 20, 30));
+
+alter table public.contracts drop constraint if exists contracts_templates_check;
+alter table public.contracts
+  add constraint contracts_templates_check check (cardinality(templates) >= 1 and templates <@ array['agencia', 'social_media', 'studio']::text[]);
+
+alter table public.contracts drop constraint if exists contracts_publisher_check;
+alter table public.contracts
+  add constraint contracts_publisher_check check (publisher is null or publisher in ('contratada', 'contratante'));
+
+alter table public.contracts drop constraint if exists contracts_video_quantity_check;
+alter table public.contracts
+  add constraint contracts_video_quantity_check check (video_quantity is null or video_quantity >= 1);
+
+create or replace function public.guard_contract_status() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_activating boolean := coalesce(nullif(current_setting('app.activating_contract', true), ''), 'off') = 'on';
+  v_admin boolean := public.is_admin();
+begin
+  if tg_op = 'INSERT' then
+    if new.status is distinct from 'rascunho' then
+      raise exception 'Novos contratos devem ser criados obrigatoriamente em rascunho';
+    end if;
+    if new.activated_at is not null or new.activated_by is not null then
+      raise exception 'Dados de ativação são definidos apenas pela função oficial de ativação';
+    end if;
+    return new;
+  end if;
+
+  if (new.activated_at is distinct from old.activated_at or new.activated_by is distinct from old.activated_by)
+     and not v_activating then
+    raise exception 'Dados de ativação são definidos apenas pela função oficial de ativação';
+  end if;
+
+  if old.status <> 'rascunho' and new.status = 'rascunho' then
+    raise exception 'Contratos ativos ou finalizados não podem voltar para rascunho';
+  end if;
+  if old.status in ('cancelado', 'encerrado') and new.status = 'ativo' then
+    raise exception 'Contratos cancelados ou encerrados não podem ser reativados diretamente';
+  end if;
+  if old.status is distinct from 'ativo' and new.status = 'ativo' then
+    if not v_activating or not (public.can_write('contratos') and public.can_write('financeiro')) then
+      raise exception 'Contratos só podem ser ativados através da função oficial de ativação com permissão financeira';
+    end if;
+  end if;
+  if old.status = 'ativo' and new.status in ('cancelado', 'encerrado') then
+    if not public.can_write('financeiro') then
+      raise exception 'Apenas usuários com permissão no módulo Financeiro podem cancelar ou encerrar contratos ativos';
+    end if;
+  end if;
+
+  if old.status <> 'rascunho' and not v_admin
+     and (new.client_id is distinct from old.client_id or new.lead_id is distinct from old.lead_id) then
+    raise exception 'Cliente e lead de um contrato firmado só podem ser corrigidos pelo administrador';
+  end if;
+
+  if old.status <> 'rascunho'
+     and (new.due_day              is distinct from old.due_day
+       or new.payment_method       is distinct from old.payment_method
+       or new.installments         is distinct from old.installments
+       or new.payment_terms        is distinct from old.payment_terms
+       or new.renewal              is distinct from old.renewal
+       or new.notice_days          is distinct from old.notice_days
+       or new.min_months           is distinct from old.min_months
+       or new.start_date           is distinct from old.start_date
+       or new.end_date             is distinct from old.end_date
+       or new.templates            is distinct from old.templates
+       or new.platforms            is distinct from old.platforms
+       or new.publisher            is distinct from old.publisher
+       or new.video_quantity       is distinct from old.video_quantity
+       or new.shooting_location    is distinct from old.shooting_location
+       or new.first_payment_date   is distinct from old.first_payment_date
+       or new.billing_periodicity  is distinct from old.billing_periodicity
+       or new.portfolio_authorized is distinct from old.portfolio_authorized
+       or new.forum_city           is distinct from old.forum_city)
+     and not (public.can_write('financeiro') or v_admin) then
+    raise exception 'Apenas usuários com permissão no módulo Financeiro (ou o administrador) podem alterar condições de contratos firmados';
+  end if;
+
+  return new;
+end $$;
+
+revoke execute on function public.guard_contract_status() from public, anon, authenticated;

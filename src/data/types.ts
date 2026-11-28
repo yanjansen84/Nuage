@@ -35,6 +35,8 @@ export interface ChecklistTemplateItem extends Row { template_id: string; title:
 
 export interface Client extends Row {
   name: string; segment: string | null; contact_name: string | null; phone: string | null; email: string | null
+  legal_name: string | null; document: string | null; address: string | null
+  legal_rep_name: string | null; legal_rep_cpf: string | null
   status_id: string | null; notes: string | null; created_by: string | null; created_at: string
 }
 export interface Lead extends Row {
@@ -45,13 +47,19 @@ export interface Lead extends Row {
 }
 export interface LeadValue { lead_id: string; estimated_value: number | null }
 
+export type ContractTemplateKey = 'agencia' | 'social_media' | 'studio'
 export type ContractStatus = 'rascunho' | 'ativo' | 'encerrado' | 'cancelado'
 export interface Contract extends Row {
   client_id: string; lead_id: string | null; status: ContractStatus
   start_date: string | null; end_date: string | null; min_months: number | null
   renewal: 'automatica' | 'manual'; notice_days: number | null; due_day: number | null
   payment_method: 'pix' | 'boleto' | 'cartao' | null; installments: number | null
-  payment_terms: string | null; notes: string | null; activated_at: string | null; created_at: string
+  payment_terms: string | null; notes: string | null
+  templates: ContractTemplateKey[]; platforms: string | null
+  publisher: 'contratada' | 'contratante' | null; video_quantity: number | null
+  shooting_location: string | null; first_payment_date: string | null
+  billing_periodicity: string | null; portfolio_authorized: boolean; forum_city: string
+  activated_at: string | null; created_at: string
 }
 export interface ContractItem extends Row {
   contract_id: string; service_id: string; offer_id: string | null; description: string | null
@@ -83,14 +91,14 @@ export interface Task extends Row {
   project_id: string | null; client_id: string | null; parent_id: string | null; title: string
   description: string | null; owner_id: string | null; status_id: string | null; priority: Priority
   start_date: string | null; due_date: string | null; effort_hours: number | null
-  recurrence: { freq: 'daily' | 'weekly' | 'monthly' } | null; done_at: string | null
-  created_by: string | null; created_at: string
+  recurrence: { freq: 'daily' | 'weekly' | 'monthly' } | null; recurrence_source_id: string | null
+  done_at: string | null; created_by: string | null; created_at: string
 }
 export interface TaskCollaborator { task_id: string; profile_id: string }
 export interface TaskDependency { task_id: string; depends_on: string }
 export interface TaskChecklistItem extends Row { task_id: string; title: string; done: boolean; sort: number }
 export interface Comment extends Row {
-  entity: 'task' | 'project' | 'lead' | 'client' | 'content'; entity_id: string; author_id: string; body: string
+  entity: 'task' | 'project' | 'lead' | 'client' | 'content' | 'strategy'; entity_id: string; author_id: string; body: string
   resolved: boolean; created_at: string
 }
 export interface EventRow extends Row {
@@ -104,6 +112,40 @@ export interface Content extends Row {
   posted_at: string | null; posted_url: string | null; created_by: string | null; created_at: string
 }
 export interface ContentHistory { id: number; content_id: string; at: string; actor: string | null; from_label: string | null; to_label: string | null }
+export interface ContentApprovalLink extends Row {
+  content_id: string; token: string; expires_at: string; revoked_at: string | null; created_by: string | null; created_at: string
+}
+export interface ContentApproval extends Row {
+  link_id: string; content_id: string; decision: 'aprovado' | 'ajustes'; reviewer_name: string; comment: string | null; created_at: string
+}
+export interface PublicApprovalInfo {
+  content_id: string; title: string; client_name: string | null; format_label: string | null
+  status_label: string | null; status_color: string | null; channel: string | null; objective: string | null
+  caption: string | null; links: string | null; publish_date: string | null; publish_time: string | null
+  expires_at: string; decision: 'aprovado' | 'ajustes' | null; reviewer_name: string | null
+  feedback: string | null; decided_at: string | null
+}
+export interface ClientBriefing {
+  client_id: string; audience: string | null; tone_of_voice: string | null; differentials: string | null
+  competitors: string | null; references_links: string | null; restrictions: string | null; notes: string | null
+  updated_by: string | null; updated_at: string
+}
+export interface Campaign extends Row {
+  client_id: string; name: string; channel: string | null; objective: string | null; status_id: string | null
+  start_date: string | null; end_date: string | null; owner_id: string | null; links: string | null
+  notes: string | null; created_by: string | null; created_at: string
+}
+export interface CampaignBudget { campaign_id: string; monthly_budget: number | null; spent_amount: number | null }
+export type StrategyStatus = 'rascunho' | 'ativo' | 'arquivado'
+export interface Strategy extends Row {
+  client_id: string | null; title: string; status: StrategyStatus; start_date: string | null; end_date: string | null
+  positioning: string | null; personas: string | null; pillars: string[]; channels: string | null
+  goals: string | null; kpis: string | null; notes: string | null; owner_id: string | null
+  created_by: string | null; created_at: string
+}
+export interface PushSubscriptionRow extends Row {
+  user_id: string; endpoint: string; p256dh: string; auth: string; created_at: string
+}
 /** Aviso para uma pessoa. Criado só pelo banco (triggers e lembretes); o app lê, marca como lida e dispensa. */
 export interface NotificationRow extends Row {
   user_id: string; kind: string; title: string; body: string | null; link: string | null
@@ -129,6 +171,10 @@ export interface Tables {
   checklist_templates: ChecklistTemplate
   checklist_template_items: ChecklistTemplateItem
   clients: Client
+  client_briefings: ClientBriefing
+  campaigns: Campaign
+  campaign_budgets: CampaignBudget
+  strategies: Strategy
   leads: Lead
   lead_values: LeadValue
   contracts: Contract
@@ -145,6 +191,9 @@ export interface Tables {
   events: EventRow
   contents: Content
   content_history: ContentHistory
+  content_approval_links: ContentApprovalLink
+  content_approvals: ContentApproval
+  push_subscriptions: PushSubscriptionRow
   audit_log: AuditEntry
   notifications: NotificationRow
 }

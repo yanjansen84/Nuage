@@ -1,10 +1,12 @@
 // Financeiro → aba "Contas a pagar": despesas da agência com vencimento,
 // situação, categoria editável e criação em série (mensal ou parcelada).
+import { Download } from 'lucide-react'
 import { useState } from 'react'
-import { db } from '../data/db'
+import { db, traduzErro } from '../data/db'
 import { useOptions, useRun, useTable } from '../data/hooks'
 import type { Bill, BillMethod, BillStatus } from '../data/types'
 import { useAuth } from '../lib/auth'
+import { downloadCsv } from '../lib/csv'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { Empty, Field, fd, fdFull, Kpi, Loading, maskMoney, money, nn, parseMoney, Seg, Select, Tag, today } from '../ui/kit'
@@ -29,12 +31,22 @@ function addMonthsClamped(date: string, n: number) {
   return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`
 }
 
-export function ContasPagar({ ym, recebidoMes, editing, setEditing }: {
+function newUuid() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+export function ContasPagar({ ym, recebidoMes, editing, setEditing, onGoMonth }: {
   ym: string
   /** Recebimentos pagos no mês (aba Mês a mês), para o saldo. */
   recebidoMes: number
   editing: Bill | 'new' | null
   setEditing: (b: Bill | 'new' | null) => void
+  onGoMonth?: (ym: string) => void
 }) {
   const { can } = useAuth()
   const run = useRun()
@@ -56,7 +68,9 @@ export function ContasPagar({ ym, recebidoMes, editing, setEditing }: {
     .filter((b) => !cat || b.category_id === cat)
   const total = L.filter((b) => b.status !== 'cancelado').reduce((a, b) => a + b.amount, 0)
   const lateOther = late.filter((b) => monthOf(b.due_date) !== ym)
-  const monthName = new Date(ym + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  const nextFuture = B.find((b) => monthOf(b.due_date) > ym && b.status !== 'cancelado')
+  const fmtYm = (m: string) => new Date(m + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  const monthName = fmtYm(ym)
 
   async function markPaid(b: Bill) {
     await run(() => db.update('bills', { id: b.id }, { status: 'pago', paid_at: today() }), 'Conta marcada como paga')
@@ -81,13 +95,37 @@ export function ContasPagar({ ym, recebidoMes, editing, setEditing }: {
         <Seg value={state} onChange={setState} items={[['todas', 'Todas'], ['abertas', 'A pagar'], ['pagas', 'Pagas']]} />
         <Select value={cat} onChange={(e) => setCat(e.target.value)} placeholder="Todas as categorias" aria-label="Categoria"
           options={cats.list.map((c) => ({ value: c.id, label: c.label }))} />
+        <span className="spacer" />
+        {L.length > 0 && (
+          <button className="btn" onClick={() => downloadCsv(
+            `contas-a-pagar-${ym}.csv`,
+            ['Vencimento', 'Descrição', 'Fornecedor', 'Categoria', 'Valor', 'Situação', 'Pago em', 'Forma'],
+            L.map((b) => [
+              b.due_date, b.description, b.supplier, cats.byId(b.category_id)?.label,
+              b.amount, BILL_STATUS[billState(b)].label, b.paid_at, b.method ? BILL_METHOD[b.method] : '',
+            ]),
+          )}><Download aria-hidden />Exportar CSV</button>
+        )}
       </div>
 
       <h2>Contas de {monthName}</h2>
-      {bills.isLoading ? <Loading /> : !L.length ? (
-        <Empty action={can('financeiro', 'write') && !B.some((b) => monthOf(b.due_date) === ym) &&
-          <button className="btn" onClick={() => setEditing('new')}>Cadastrar conta</button>}>
-          {B.some((b) => monthOf(b.due_date) === ym) ? 'Nenhuma conta com esses filtros.' : 'Nenhuma conta a pagar neste mês.'}
+      {bills.isLoading ? <Loading /> : bills.isError ? (
+        <Empty>{traduzErro((bills.error as Error)?.message ?? 'Não foi possível carregar as contas a pagar.')}</Empty>
+      ) : !L.length ? (
+        <Empty action={<div className="bar" style={{ justifyContent: 'center', margin: 0 }}>
+          {nextFuture && onGoMonth && (
+            <button className="btn primary" onClick={() => onGoMonth(monthOf(nextFuture.due_date))}>
+              Ver {fmtYm(monthOf(nextFuture.due_date))}
+            </button>
+          )}
+          {can('financeiro', 'write') && !B.some((b) => monthOf(b.due_date) === ym) &&
+            <button className="btn" onClick={() => setEditing('new')}>Cadastrar conta</button>}
+        </div>}>
+          {B.some((b) => monthOf(b.due_date) === ym)
+            ? 'Nenhuma conta com esses filtros.'
+            : nextFuture
+              ? `Nenhuma conta a pagar em ${monthName}. Há contas lançadas a partir de ${fdFull(nextFuture.due_date)}.`
+              : 'Nenhuma conta a pagar neste mês.'}
         </Empty>
       ) : (
         <div className="table-wrap">
@@ -136,14 +174,17 @@ export function ContasPagar({ ym, recebidoMes, editing, setEditing }: {
         </>
       )}
 
-      {editing && <BillForm bill={editing === 'new' ? null : editing} defaultMonth={ym} all={B} onClose={() => setEditing(null)} />}
+      {editing && <BillForm key={editing === 'new' ? 'new' : editing.id} bill={editing === 'new' ? null : editing} defaultMonth={ym} all={B}
+        onSavedMonth={(m) => { if (m !== ym) onGoMonth?.(m) }} onClose={() => setEditing(null)} />}
     </>
   )
 }
 
 type Repeat = 'unica' | 'mensal' | 'parcelada'
 
-function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; defaultMonth: string; all: Bill[]; onClose: () => void }) {
+function BillForm({ bill, defaultMonth, all, onSavedMonth, onClose }: {
+  bill: Bill | null; defaultMonth: string; all: Bill[]; onSavedMonth?: (ym: string) => void; onClose: () => void
+}) {
   const { can } = useAuth()
   const run = useRun()
   const { confirm } = useFeedback()
@@ -157,16 +198,18 @@ function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; def
   })
   const [repeat, setRepeat] = useState<Repeat>('unica')
   const [times, setTimes] = useState('12')
+  const [busy, setBusy] = useState(false)
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
 
   const amount = parseMoney(f.amount)
-  const n = Math.min(60, Math.max(2, Number(times) || 0))
+  const n = Math.min(60, Math.max(2, Math.trunc(Number(times)) || 0))
   const valid = f.description.trim() && f.due_date && amount != null && amount >= 0 && (repeat === 'unica' || Number(times) >= 2)
   // contas futuras da mesma série que ainda estão em aberto (para "excluir esta e as próximas")
   const nextInSeries = bill?.series_id ? all.filter((b) => b.series_id === bill.series_id && b.due_date >= bill.due_date && b.status === 'aberto') : []
 
   async function save() {
-    if (!valid || amount == null) return
+    if (!valid || amount == null || busy) return
+    setBusy(true)
     const base = {
       description: f.description.trim(), supplier: nn(f.supplier), category_id: f.category_id || null,
       status: f.status, paid_at: f.status === 'pago' ? (f.paid_at || today()) : null,
@@ -176,7 +219,7 @@ function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; def
       if (bill) return db.update('bills', { id: bill.id }, { ...base, amount, due_date: f.due_date })
       if (repeat === 'unica') return db.insert('bills', { ...base, amount, due_date: f.due_date })
       // série: mesma data a cada mês; na parcelada o total é dividido e a diferença de centavos vai na última
-      const series_id = crypto.randomUUID()
+      const series_id = newUuid()
       const cents = Math.round(amount * 100)
       const part = repeat === 'parcelada' ? Math.floor(cents / n) : cents
       const rows: Partial<Bill>[] = Array.from({ length: n }, (_, i) => ({
@@ -188,7 +231,11 @@ function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; def
       }))
       return db.insertMany('bills', rows)
     }, bill ? 'Conta salva' : repeat === 'unica' ? 'Conta cadastrada' : `${n} contas cadastradas`)
-    if (ok) onClose()
+    setBusy(false)
+    if (ok) {
+      if (!bill) onSavedMonth?.(monthOf(f.due_date))
+      onClose()
+    }
   }
 
   async function remove(scope: 'uma' | 'proximas') {
@@ -209,7 +256,7 @@ function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; def
   return (
     <Modal open onClose={onClose} title={bill ? 'Conta a pagar' : 'Nova conta a pagar'}
       footer={<>
-        {canEdit && <button className="btn primary" onClick={save} disabled={!valid}>Salvar</button>}
+        {canEdit && <button className="btn primary" onClick={save} disabled={!valid || busy}>{busy ? 'Salvando…' : 'Salvar'}</button>}
         <button className="btn" onClick={onClose}>Cancelar</button>
         {bill && can('financeiro', 'delete') && <>
           <button className="btn danger push" onClick={() => remove('uma')}>Excluir</button>
@@ -232,11 +279,11 @@ function BillForm({ bill, defaultMonth, all, onClose }: { bill: Bill | null; def
               <div className="toolbar" style={{ margin: 0 }}>
                 <Seg value={repeat} onChange={setRepeat} items={[['unica', 'Única'], ['mensal', 'Todo mês'], ['parcelada', 'Parcelada']]} />
                 {repeat !== 'unica' && (
-                  <label className="mu" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="mu" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {repeat === 'mensal' ? 'por' : 'em'}
                     <input type="number" min={2} max={60} value={times} onChange={(e) => setTimes(e.target.value)} style={{ width: 72 }} aria-label="Quantidade" />
                     {repeat === 'mensal' ? 'meses' : 'vezes'}
-                  </label>
+                  </span>
                 )}
               </div>
             </Field>

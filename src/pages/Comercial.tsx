@@ -1,9 +1,11 @@
+import { Download } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../data/db'
 import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { Lead } from '../data/types'
 import { useAuth } from '../lib/auth'
+import { downloadCsv } from '../lib/csv'
 import { Comments } from '../components/Comments'
 import { Kanban } from '../components/Kanban'
 import { useFeedback } from '../ui/Feedback'
@@ -64,7 +66,19 @@ export default function Comercial() {
     <>
       <PageHead title="Comercial"
         sub={<>{open} em andamento · {won} fechados · conversão de {conv}%{pipeline != null && <> · funil estimado {money(pipeline)}</>}</>}
-        actions={can('crm', 'write') && <button className="btn primary" onClick={() => setEditing('new')}>Novo lead</button>} />
+        actions={<>
+          {L.length > 0 && (
+            <button className="btn" onClick={() => downloadCsv(
+              `comercial-leads-${today()}.csv`,
+              ['Contato', 'Empresa', 'Segmento', 'Origem', 'Serviço', 'Etapa', 'Responsável', 'Retorno', ...(can('financeiro') ? ['Valor estimado'] : [])],
+              L.map((l) => [
+                l.name, l.company, l.segment, l.origin, svcName(l.service_id), stages.byId(l.stage_id)?.label,
+                people.name(l.owner_id), l.follow_up, ...(can('financeiro') ? [valueOf(l.id)] : []),
+              ]),
+            )}><Download aria-hidden />Exportar CSV</button>
+          )}
+          {can('crm', 'write') && <button className="btn primary" onClick={() => setEditing('new')}>Novo lead</button>}
+        </>} />
 
       <div className="toolbar">
         <Seg value={view} onChange={setView} items={[['kb', 'Kanban'], ['list', 'Lista']]} />

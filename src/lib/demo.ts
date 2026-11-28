@@ -41,6 +41,7 @@ export function demoSeed(): Store {
     ...opt('content_status', [['Ideia', '#8e6bd8'], ['Planejado', '#2f80ed'], ['Em produção', '#ea5c2a'], ['Revisão interna', '#b97d00'], ['Aguardando aprovação', '#d6336c'], ['Ajustes', '#c0392b'], ['Aprovado', '#2e9e6a'], ['Agendado', '#0e9aa7'], ['Publicado', '#55555f', true]]),
     ...opt('bill_category', [['Aluguel e condomínio', '#5b4bdb'], ['Folha de pagamento', '#ea5c2a'], ['Impostos e taxas', '#c0392b'], ['Fornecedores', '#0e9aa7'], ['Software e assinaturas', '#2f80ed'], ['Marketing e anúncios', '#d6336c'], ['Equipamentos', '#b97d00'], ['Outros', '#55555f']]),
     ...opt('content_format', [['Reels', null], ['Stories', null], ['Carrossel', null], ['Estático', null], ['Fotografia', null], ['Vídeo institucional', null], ['Outro', null]]),
+    ...opt('campaign_status', [['Planejada', '#2f80ed'], ['Ativa', '#2e9e6a'], ['Pausada', '#b97d00'], ['Encerrada', '#55555f', true]]),
   ]
   const o = (set: string, label: string) => options.find((x) => x.set_key === set && x.label === label)!.id
 
@@ -83,9 +84,23 @@ export function demoSeed(): Store {
   const role_permissions = modules.map((m) => ({ role: 'ceo', module: m.key, scope: 'all' as const, can_write: true, can_delete: true }))
 
   const clients: Tables['clients'][] = [
-    { id: 'cli-a', name: 'Cliente Exemplo A', segment: 'Alimentação', contact_name: 'Contato A', phone: '(00) 0000-0001', email: 'a@exemplo.com', status_id: o('client_status', 'Ativo'), notes: null, created_by: null, created_at: now() },
-    { id: 'cli-b', name: 'Cliente Exemplo B', segment: 'Moda', contact_name: 'Contato B', phone: null, email: 'b@exemplo.com', status_id: o('client_status', 'Ativo'), notes: null, created_by: null, created_at: now() },
-    { id: 'cli-c', name: 'Cliente Exemplo C', segment: 'Saúde', contact_name: 'Contato C', phone: null, email: null, status_id: o('client_status', 'Em onboarding'), notes: null, created_by: null, created_at: now() },
+    {
+      id: 'cli-a', name: 'Cliente Exemplo A', segment: 'Alimentação', contact_name: 'Contato A', phone: '(00) 0000-0001', email: 'a@exemplo.com',
+      legal_name: 'Cliente Exemplo A Gastronomia Ltda', document: '12.345.678/0001-90', address: 'Av. dos Holandeses, 100, Calhau, São Luís - MA',
+      legal_rep_name: 'Contato A', legal_rep_cpf: '111.222.333-44',
+      status_id: o('client_status', 'Ativo'), notes: null, created_by: null, created_at: now(),
+    },
+    {
+      id: 'cli-b', name: 'Cliente Exemplo B', segment: 'Moda', contact_name: 'Contato B', phone: null, email: 'b@exemplo.com',
+      legal_name: 'Cliente Exemplo B Moda Ltda', document: '98.765.432/0001-10', address: 'Rua Grande, 250, Centro, São Luís - MA',
+      legal_rep_name: 'Contato B', legal_rep_cpf: '555.666.777-88',
+      status_id: o('client_status', 'Ativo'), notes: null, created_by: null, created_at: now(),
+    },
+    {
+      id: 'cli-c', name: 'Cliente Exemplo C', segment: 'Saúde', contact_name: 'Contato C', phone: null, email: null,
+      legal_name: null, document: null, address: null, legal_rep_name: null, legal_rep_cpf: null,
+      status_id: o('client_status', 'Em onboarding'), notes: null, created_by: null, created_at: now(),
+    },
   ]
 
   const lead = (name: string, company: string, stage: string, owner: string | null, follow: number | null, svc: string | null): Tables['leads'] => ({
@@ -102,12 +117,19 @@ export function demoSeed(): Store {
   ]
   const lead_values = leads.map((l, i) => ({ lead_id: l.id, estimated_value: [1500, 2500, 1200, 2500, 1500][i] }))
 
-  const contract = (cid: string, client_id: string, status: Tables['contracts']['status'], startOffset: number): Tables['contracts'] => ({
+  const contract = (cid: string, client_id: string, status: Tables['contracts']['status'], startOffset: number, extra: Partial<Tables['contracts']> = {}): Tables['contracts'] => ({
     id: cid, client_id, lead_id: null, status, start_date: status === 'rascunho' ? null : monthStart(startOffset), end_date: null,
-    min_months: 6, renewal: 'automatica', notice_days: 15, due_day: 10, payment_method: 'pix', installments: 1,
-    payment_terms: null, notes: null, activated_at: status === 'ativo' ? now() : null, created_at: now(),
+    min_months: 6, renewal: 'automatica', notice_days: 30, due_day: 10, payment_method: 'pix', installments: 1,
+    payment_terms: null, notes: null, templates: ['agencia'], platforms: 'Instagram e Meta Ads', publisher: 'contratada',
+    video_quantity: null, shooting_location: null, first_payment_date: status === 'rascunho' ? null : monthStart(startOffset),
+    billing_periodicity: 'Mensal', portfolio_authorized: true, forum_city: 'São Luís - MA',
+    activated_at: status === 'ativo' ? now() : null, created_at: now(), ...extra,
   })
-  const contracts = [contract('ct-a', 'cli-a', 'ativo', -4), contract('ct-b', 'cli-b', 'ativo', -5), contract('ct-c', 'cli-c', 'rascunho', 0)]
+  const contracts = [
+    contract('ct-a', 'cli-a', 'ativo', -4, { templates: ['agencia'] }),
+    contract('ct-b', 'cli-b', 'ativo', -5, { templates: ['social_media', 'studio'], platforms: 'Instagram', publisher: 'contratada', video_quantity: 5, shooting_location: 'Loja Centro · São Luís - MA' }),
+    contract('ct-c', 'cli-c', 'rascunho', 0, { templates: ['social_media'], platforms: 'Instagram', publisher: 'contratante' }),
+  ]
   const contract_items: Tables['contract_items'][] = [
     { id: id('ci'), contract_id: 'ct-a', service_id: 'svc-ag', offer_id: 'of-ag', description: null, quantity: 1, list_price: 2500, negotiated_price: 2300, billing_type: 'recorrente' },
     { id: id('ci'), contract_id: 'ct-b', service_id: 'svc-sm', offer_id: 'of-sm', description: null, quantity: 1, list_price: 1500, negotiated_price: 1500, billing_type: 'recorrente' },
@@ -161,7 +183,7 @@ export function demoSeed(): Store {
   const task = (title: string, project_id: string, client_id: string, owner: string | null, dueOffset: number | null, status = 'Pendente', priority: Tables['tasks']['priority'] = 'media'): Tables['tasks'] => ({
     id: id('task'), project_id, client_id, parent_id: null, title, description: null, owner_id: owner, status_id: o('task_status', status),
     priority, start_date: day(-5), due_date: dueOffset === null ? null : day(dueOffset), effort_hours: null, recurrence: null,
-    done_at: status === 'Concluída' ? now() : null, created_by: null, created_at: now(),
+    recurrence_source_id: null, done_at: status === 'Concluída' ? now() : null, created_by: null, created_at: now(),
   })
   const tasks = [
     task('Briefing', 'pj-1', 'cli-c', DEMO_USER_ID, -2, 'Em andamento', 'alta'),
@@ -197,9 +219,39 @@ export function demoSeed(): Store {
     content('Novidades da loja', 'cli-b', 'Fotografia', 'Ajustes', 'demo-davi', 4, -1),
   ]
   const content_history = contents.map((c, i) => ({ id: i + 1, content_id: c.id, at: now(), actor: null, from_label: null, to_label: options.find((x) => x.id === c.status_id)!.label }))
+  const content_approval_links: Tables['content_approval_links'][] = [{
+    id: 'apr-link-1', content_id: contents[1].id, token: 'demo-aprovacao',
+    expires_at: new Date(Date.now() + 14 * 86400_000).toISOString(), revoked_at: null, created_by: DEMO_USER_ID, created_at: now(),
+  }]
+  const content_approvals: Tables['content_approvals'][] = []
+  const client_briefings: Tables['client_briefings'][] = [{
+    client_id: 'cli-a', audience: 'Público local de 25 a 45 anos interessado em gastronomia artesanal',
+    tone_of_voice: 'Acolhedor, próximo e saboroso, sem jargões corporativos', differentials: 'Fermentação natural e ingredientes regionais',
+    competitors: 'Padarias artesanais do bairro', references_links: 'https://instagram.com', restrictions: 'Evitar descontos agressivos e linguagem formal demais',
+    notes: 'Priorizar bastidores e rotina da cozinha nos Reels.', updated_by: DEMO_USER_ID, updated_at: now(),
+  }]
+  const campaigns: Tables['campaigns'][] = [{
+    id: 'camp-1', client_id: 'cli-b', name: 'Lançamento coleção verão', channel: 'Meta Ads',
+    objective: 'Tráfego para loja e mensagens no WhatsApp', status_id: o('campaign_status', 'Ativa'),
+    start_date: day(-7), end_date: day(23), owner_id: 'demo-bruno', links: null, notes: 'Criativos focados em Reels',
+    created_by: DEMO_USER_ID, created_at: now(),
+  }]
+  const campaign_budgets: Tables['campaign_budgets'][] = [{ campaign_id: 'camp-1', monthly_budget: 2500, spent_amount: 820 }]
+  const strategies: Tables['strategies'][] = [{
+    id: 'strat-1', client_id: 'cli-a', title: 'Posicionamento Q4 · Cardápio & Bastidores', status: 'ativo',
+    start_date: monthStart(0), end_date: monthStart(3),
+    positioning: 'Consolidar a marca como referência em gastronomia artesanal na região.',
+    personas: 'Moradores da região, casais jovens e entusiastas de culinária',
+    pillars: ['Bastidores e preparo', 'Prova social e clientes', 'Educação sobre ingredientes'],
+    channels: 'Instagram (Reels, Stories, Carrossel) + Meta Ads local',
+    goals: 'Aumentar alcance orgânico em 30% e gerar 120 pedidos mensais via DM/WhatsApp',
+    kpis: 'Alcance semanal, salvamentos, cliques no WhatsApp',
+    notes: 'Alinhar calendário quinzenalmente com o cliente.', owner_id: DEMO_USER_ID, created_by: DEMO_USER_ID, created_at: now(),
+  }]
 
   return {
-    contents, content_history,
+    contents, content_history, content_approval_links, content_approvals,
+    client_briefings, campaigns, campaign_budgets, strategies, push_subscriptions: [],
     profiles, profile_details: details, roles, modules, role_permissions, user_permissions: [],
     options, services, service_offers: offers, offer_prices: prices,
     checklist_templates: [tpl], checklist_template_items: tplItems,

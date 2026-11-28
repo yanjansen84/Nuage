@@ -255,9 +255,10 @@ input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--mu) 
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 
 .toast {
-  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  position: fixed; left: 50%; top: auto; right: auto; bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%); margin: 0; border: 0;
   background: var(--ink); color: #fff; padding: 10px 16px; border-radius: var(--r-sm); z-index: 9;
-  font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); max-width: min(520px, calc(100vw - 32px));
   animation: toast-in 220ms var(--ease);
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
@@ -300,7 +301,8 @@ input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--mu) 
 /* =====================================================================
    Notificações · sino no topo/menu + painel
    ===================================================================== */
-.notif { position: relative; order: 2; }
+.top-tools { display: flex; align-items: center; gap: 4px; order: 2; }
+.notif { position: relative; }
 .top .me { order: 1; }
 .notif-btn {
   position: relative; display: grid; place-items: center; width: 36px; height: 36px;
@@ -367,14 +369,14 @@ input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--mu) 
 .notif-empty b { color: var(--tx); font-size: 15px; }
 .notif-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--ln); background: var(--raise); font-size: 13px; color: var(--mu); }
 
-/* desktop: sino no canto do menu lateral; painel abre ao lado do menu */
+/* desktop: sino e busca no canto do menu lateral; painel abre ao lado do menu */
 @media (min-width: 1024px) {
-  .notif { position: absolute; top: 20px; right: 12px; }
+  .top-tools { position: absolute; top: 20px; right: 12px; }
   .notif-panel { top: 16px; left: 252px; right: auto; max-height: calc(100dvh - 32px); }
 }
-/* celular: sino ao lado do hambúrguer; painel ocupa a tela abaixo do topo */
+/* celular: sino e busca ao lado do hambúrguer; painel ocupa a tela abaixo do topo */
 @media (max-width: 639px) {
-  .notif { margin-left: auto; }
+  .top-tools { margin-left: auto; }
   .burger { order: 3; }
   .notif-panel {
     top: calc(56px + env(safe-area-inset-top, 0px)); left: 0; right: 0; bottom: 0; width: auto; max-height: none;

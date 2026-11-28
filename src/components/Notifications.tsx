@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   AlarmClock, Bell, BellRing, Briefcase, CalendarDays, CheckCheck, CircleCheck, Clapperboard, ClipboardList,
-  KanbanSquare, MessageSquare, UserPlus, Wallet, X,
+  Compass, KanbanSquare, MessageSquare, UserPlus, Wallet, X,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
@@ -13,6 +13,7 @@ import { db } from '../data/db'
 import { useTable } from '../data/hooks'
 import type { NotificationRow } from '../data/types'
 import { useAuth } from '../lib/auth'
+import { isDemo } from '../lib/supabase'
 import { useFeedback } from '../ui/Feedback'
 
 const KINDS: Record<string, { icon: LucideIcon; tone: string; label: string }> = {
@@ -27,12 +28,16 @@ const KINDS: Record<string, { icon: LucideIcon; tone: string; label: string }> =
   content_review: { icon: Clapperboard, tone: 'var(--k2)', label: 'Revisão' },
   content_status: { icon: Clapperboard, tone: 'var(--k2)', label: 'Conteúdo' },
   content_publish: { icon: Clapperboard, tone: 'var(--k1)', label: 'Publicação' },
+  content_approved: { icon: CircleCheck, tone: 'var(--ok)', label: 'Aprovado' },
+  content_changes: { icon: Clapperboard, tone: 'var(--er)', label: 'Ajustes' },
+  strategy_assigned: { icon: Compass, tone: 'var(--k4)', label: 'Estratégia' },
   lead_assigned: { icon: Briefcase, tone: 'var(--k1)', label: 'Comercial' },
   lead_followup: { icon: Briefcase, tone: 'var(--k5)', label: 'Retorno' },
   event: { icon: CalendarDays, tone: 'var(--k4)', label: 'Agenda' },
   comment: { icon: MessageSquare, tone: 'var(--k3)', label: 'Comentário' },
   pay_late: { icon: Wallet, tone: 'var(--er)', label: 'Financeiro' },
   bills_due: { icon: Wallet, tone: 'var(--k5)', label: 'Contas a pagar' },
+  contract_ending: { icon: Briefcase, tone: 'var(--k5)', label: 'Contrato' },
 }
 const kindOf = (k: string) => KINDS[k] ?? { icon: Bell, tone: 'var(--mu)', label: 'Aviso' }
 
@@ -58,6 +63,28 @@ function groupOf(iso: string) {
   return 'Anteriores'
 }
 const safeLink = (l: string | null) => (l && /^\/([^/]|$)/.test(l) ? l : null) // só caminhos internos
+
+const VAPID_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined
+function urlBase64ToUint8Array(base64: string) {
+  const pad = '='.repeat((4 - (base64.length % 4)) % 4)
+  const raw = atob((base64 + pad).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0))
+}
+async function syncPushSubscription(userId: string) {
+  if (isDemo || !VAPID_KEY || !('serviceWorker' in navigator) || !('PushManager' in window)) return
+  if (!('Notification' in window) || Notification.permission !== 'granted') return
+  try {
+    const reg = await navigator.serviceWorker.ready
+    const sub = (await reg.pushManager.getSubscription()) ?? await reg.pushManager.subscribe({
+      userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_KEY),
+    })
+    const json = sub.toJSON()
+    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) return
+    await db.upsert('push_subscriptions', {
+      user_id: userId, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
+    }, 'user_id,endpoint')
+  } catch { /* navegador sem suporte ou VAPID não configurado */ }
+}
 
 /** Alerta do sistema (fora da página): só com permissão e com o app em segundo plano. */
 async function systemAlert(n: NotificationRow) {
@@ -97,9 +124,10 @@ export function NotificationBell() {
     return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', onVisible) }
   }, [profile?.id, reload])
 
-  // tempo real: chegou aviso novo
+  // tempo real: chegou aviso novo + sincroniza assinatura Web Push quando permitido
   useEffect(() => {
     if (!profile?.id) return
+    void syncPushSubscription(profile.id)
     return db.subscribeNotifications(profile.id, (n) => {
       void reload()
       if (!n) return
@@ -145,7 +173,10 @@ export function NotificationBell() {
     if (!('Notification' in window)) return
     const p = await Notification.requestPermission()
     setPerm(p)
-    if (p === 'granted') toast('Alertas ativados neste dispositivo')
+    if (p === 'granted') {
+      if (profile?.id) void syncPushSubscription(profile.id)
+      toast('Alertas ativados neste dispositivo')
+    }
   }
 
   let lastGroup = ''

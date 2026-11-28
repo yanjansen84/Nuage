@@ -8,6 +8,7 @@ import { resetDemo } from '../data/demoDb'
 import { useTheme } from '../lib/theme'
 import { useTable } from '../data/hooks'
 import { NotificationBell } from './Notifications'
+import { GlobalSearch } from './GlobalSearch'
 
 /**
  * Layout responsivo (definido no CSS):
@@ -59,7 +60,10 @@ export default function AppShell() {
           <img src={logoBranco} alt="Na.Nu" width={1200} height={309} />
         </NavLink>
 
-        <NotificationBell />
+        <div className="top-tools">
+          <GlobalSearch />
+          <NotificationBell />
+        </div>
 
         <button
           ref={toggleRef}

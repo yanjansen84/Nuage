@@ -2,6 +2,8 @@
 // jsPDF é carregado só quando o usuário pede um PDF, para não pesar o sistema.
 import type { jsPDF as JsPDF } from 'jspdf'
 import logoUrl from '../assets/logo-nanu.png'
+import type { ContractTemplateKey } from '../data/types'
+import { buildContractDocument, NUAGE_COMPANY } from './contractTemplates'
 
 const ORANGE: [number, number, number] = [234, 92, 42]   // #ea5c2a
 const SUN: [number, number, number] = [255, 209, 102]    // #ffd166
@@ -117,14 +119,22 @@ const safeName = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').repla
 // Contrato
 // ======================================================================
 export interface ContractPdfData {
-  client: { name: string; contact_name?: string | null; email?: string | null; phone?: string | null; segment?: string | null }
+  client: {
+    name: string; contact_name?: string | null; email?: string | null; phone?: string | null; segment?: string | null
+    legal_name?: string | null; document?: string | null; address?: string | null
+    legal_rep_name?: string | null; legal_rep_cpf?: string | null
+  }
   status: string
+  templates?: ContractTemplateKey[]
   items: { service: string; option: string | null; quantity: number; billing: string; listPrice: number | null; price: number; deliverables: string[]; deliveryNote?: string | null }[]
   monthly: number
   oneTime: number
   terms: {
     start: string | null; minMonths: number | null; minEnd: string | null; renewal: string; noticeDays: number | null
     dueDay: number | null; paymentMethod: string | null; installments: number | null; paymentTerms: string | null; notes: string | null
+    firstPaymentDate?: string | null; billingPeriodicity?: string | null; platforms?: string | null
+    publisher?: 'contratada' | 'contratante' | null; videoQuantity?: number | null; shootingLocation?: string | null
+    portfolioAuthorized?: boolean; forumCity?: string | null
   }
 }
 
@@ -132,16 +142,72 @@ export async function contractPdf(d: ContractPdfData) {
   const { jsPDF, autoTable } = await loadLibs()
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
   const W = doc.internal.pageSize.getWidth()
-  let y = await header(doc, 'Contrato de prestação de serviços', `Termos comerciais · ${d.client.name}${d.status !== 'Ativo' ? ` · ${d.status}` : ''}`)
+  const templates: ContractTemplateKey[] = d.templates?.length ? d.templates : ['agencia']
+  const t = d.terms
+  const legalDoc = buildContractDocument({
+    client: d.client,
+    templates,
+    items: d.items,
+    monthly: d.monthly,
+    oneTime: d.oneTime,
+    minMonths: t.minMonths,
+    start: t.start,
+    minEnd: t.minEnd,
+    renewal: t.renewal,
+    noticeDays: t.noticeDays,
+    dueDay: t.dueDay,
+    paymentMethod: t.paymentMethod,
+    installments: t.installments,
+    paymentTerms: t.paymentTerms,
+    firstPaymentDate: t.firstPaymentDate ?? null,
+    billingPeriodicity: t.billingPeriodicity ?? null,
+    platforms: t.platforms ?? null,
+    publisher: t.publisher ?? null,
+    videoQuantity: t.videoQuantity ?? null,
+    shootingLocation: t.shootingLocation ?? null,
+    portfolioAuthorized: t.portfolioAuthorized ?? true,
+    forumCity: t.forumCity?.trim() || 'São Luís - MA',
+    notes: t.notes,
+  })
 
-  y = section(doc, 'Contratante', y + 2)
+  let y = await header(
+    doc,
+    'Contrato de prestação de serviços',
+    `${legalDoc.subtitle} · ${d.client.name}${d.status !== 'Ativo' ? ` · ${d.status}` : ''}`,
+  )
+
+  // Cabeçalho jurídico fiel (identificação do modelo, título e qualificação literal das partes)
+  y = ensure(doc, y + 1, 24)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...ORANGE)
+  doc.text(legalDoc.modelLabel, M, y); y += 5
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK)
+  for (const line of doc.splitTextToSize(legalDoc.title, W - M * 2) as string[]) {
+    doc.text(line, M, y); y += 4.8
+  }
+  y += 2
+  y = paragraph(doc, legalDoc.contratanteLine, y)
+  y = paragraph(doc, legalDoc.contratadaLine, y)
+  y = paragraph(doc, legalDoc.preamble, y)
+
+  y = section(doc, 'Contratante', y + 1)
   y = keyValues(doc, [
-    ['Cliente', d.client.name], ['Segmento', d.client.segment ?? '—'],
-    ['Responsável', d.client.contact_name ?? '—'], ['Contato', [d.client.email, d.client.phone].filter(Boolean).join(' · ') || '—'],
+    ['Razão social / Nome', d.client.legal_name || d.client.name],
+    ['CPF / CNPJ', d.client.document || '__________________________'],
+    ['Nome fantasia / Marca', d.client.name],
+    ['Segmento', d.client.segment ?? '—'],
+    ['Endereço completo', d.client.address || '____________________________________'],
+    ['Representante legal', d.client.legal_rep_name || d.client.contact_name || '—'],
+    ['CPF do representante', d.client.legal_rep_cpf || '—'],
+    ['Contato', [d.client.email, d.client.phone].filter(Boolean).join(' · ') || '—'],
   ], y + 3)
 
   y = section(doc, 'Contratada', y)
-  y = keyValues(doc, [['Empresa', 'Nuage'], ['Sistema', 'Na.Nu']], y + 3)
+  y = keyValues(doc, [
+    ['Razão social', NUAGE_COMPANY.legalName],
+    ['CNPJ', NUAGE_COMPANY.cnpj],
+    ['Nome fantasia', NUAGE_COMPANY.tradeName],
+    ['Representante legal', NUAGE_COMPANY.representative],
+  ], y + 3)
 
   y = section(doc, 'Serviços contratados', y)
   autoTable(doc, {
@@ -166,7 +232,7 @@ export async function contractPdf(d: ContractPdfData) {
 
   const withScope = d.items.filter((i) => i.deliverables.length)
   if (withScope.length) {
-    y = section(doc, 'Escopo dos serviços', y)
+    y = section(doc, 'Escopo dos serviços contratados', y)
     for (const i of withScope) {
       y = ensure(doc, y + 2, 10)
       doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...INK)
@@ -184,29 +250,97 @@ export async function contractPdf(d: ContractPdfData) {
     y += 3
   }
 
-  y = section(doc, 'Condições comerciais', y)
-  const t = d.terms
-  y = keyValues(doc, [
-    ['Início', date(t.start)], ['Prazo mínimo', t.minMonths ? `${t.minMonths} meses${t.minEnd ? ` (até ${date(t.minEnd)})` : ''}` : '—'],
-    ['Renovação', t.renewal], ['Aviso prévio para cancelamento', t.noticeDays ? `${t.noticeDays} dias` : '—'],
-    ['Dia de vencimento', t.dueDay ? `Todo dia ${t.dueDay}` : '—'], ['Forma de pagamento', t.paymentMethod ?? '—'],
-    ['Parcelas', t.installments ? String(t.installments) : '—'], ['Condições de pagamento', t.paymentTerms ?? '—'],
-  ], y + 3)
-  if (t.renewal === 'Automática') y = paragraph(doc, 'O contrato renova automaticamente ao fim do prazo mínimo, caso não haja solicitação de encerramento pelo contratante dentro do aviso prévio informado.', y)
-  if (t.notes) { y = section(doc, 'Observações', y); y = paragraph(doc, t.notes, y + 3) }
+  y = section(doc, 'Quadro comercial e especificações', y)
+  const specPairs: [string, string][] = [
+    ['Início', date(t.start)],
+    ['Prazo mínimo', t.minMonths ? `${t.minMonths} meses${t.minEnd ? ` (até ${date(t.minEnd)})` : ''}` : 'Indeterminado'],
+    ['Renovação', t.renewal],
+    ['Aviso prévio', `${t.noticeDays ?? 30} dias`],
+    ['Dia de vencimento', t.dueDay ? `Todo dia ${t.dueDay}` : '—'],
+    ['1º pagamento', date(t.firstPaymentDate ?? t.start)],
+    ['Periodicidade', t.billingPeriodicity || (d.monthly > 0 ? 'Mensal' : 'Única / Pacote')],
+    ['Forma de pagamento', t.paymentMethod ?? '—'],
+    ['Parcelas', t.installments ? String(t.installments) : '—'],
+    ['Condições de pagamento', t.paymentTerms ?? '—'],
+  ]
+  if (templates.includes('agencia') || templates.includes('social_media')) {
+    specPairs.push(['Plataformas', t.platforms || 'Conforme briefing'])
+  }
+  if (templates.includes('social_media')) {
+    specPairs.push(['Publicação (Cláus. 2.13)', t.publisher === 'contratante' ? 'CONTRATANTE' : 'CONTRATADA'])
+  }
+  if (templates.includes('studio')) {
+    specPairs.push(['Vídeos contratados (Studio)', t.videoQuantity ? String(t.videoQuantity) : 'Conforme pacote'])
+    specPairs.push(['Local de captação', t.shootingLocation || 'A definir'])
+  }
+  specPairs.push(['Uso em portfólio', (t.portfolioAuthorized ?? true) ? 'AUTORIZO' : 'NÃO AUTORIZO'])
+  specPairs.push(['Foro eleito', t.forumCity?.trim() || 'São Luís - MA'])
+  y = keyValues(doc, specPairs, y + 3)
 
-  // assinaturas
-  y = ensure(doc, y + 18, 30)
+  // Cláusulas contratuais integrais (texto fiel)
+  y = section(doc, 'Cláusulas e condições contratuais', y + 1) + 2
+  for (const clause of legalDoc.clauses) {
+    y = ensure(doc, y + 1, 16)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK)
+    for (const tLine of doc.splitTextToSize(clause.title, W - M * 2) as string[]) {
+      y = ensure(doc, y, 6)
+      doc.text(tLine, M, y)
+      y += 5
+    }
+    y += 1
+    for (const p of clause.paragraphs) {
+      const isRoman = /^[IVX]+\.\s/.test(p)
+      const isSubheading = /^FRENTE \d+|^Diretrizes |^Regras específicas|^Autorização de imagem/.test(p)
+      const isHighlight = /^\[ [X ] \]|^RESPONSÁVEL PELA PUBLICAÇÃO|^Valor mensal contratado/.test(p)
+      const indent = isRoman ? 4 : 0
+      doc.setFont('helvetica', isSubheading || isHighlight ? 'bold' : 'normal')
+      doc.setFontSize(9.5); doc.setTextColor(...INK)
+      const lines = doc.splitTextToSize(p, W - M * 2 - indent) as string[]
+      for (const line of lines) {
+        y = ensure(doc, y, 5)
+        doc.text(line, M + indent, y)
+        y += 4.6
+      }
+      y += 1.8
+    }
+    y += 2.5
+  }
+
+  // Fecho, local/data, assinaturas das partes e 2 testemunhas em branco
+  y = paragraph(doc, legalDoc.closingLine, y + 2)
+  y = ensure(doc, y + 2, 74)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...INK)
+  doc.text(legalDoc.dateLine, M, y)
+  y += 18
+
   const half = (W - M * 2 - 16) / 2
   doc.setDrawColor(...INK); doc.setLineWidth(0.3)
   doc.line(M, y, M + half, y); doc.line(M + half + 16, y, W - M, y)
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED)
-  doc.text(d.client.name, M, y + 5); doc.text('Contratante', M, y + 9.5)
-  doc.text('Nuage', M + half + 16, y + 5); doc.text('Contratada', M + half + 16, y + 9.5)
-  doc.text('Local e data: ____________________________________', M, y + 20)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK)
+  doc.text(d.client.legal_name || d.client.name, M, y + 4.5)
+  doc.text(NUAGE_COMPANY.legalName, M + half + 16, y + 4.5)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.3); doc.setTextColor(...MUTED)
+  doc.text(`CPF/CNPJ: ${d.client.document || '__________________'}`, M, y + 8.8)
+  if (d.client.legal_rep_name) doc.text(`Representante legal: ${d.client.legal_rep_name}`, M, y + 12.8)
+  doc.text(`CNPJ: ${NUAGE_COMPANY.cnpj} · ${NUAGE_COMPANY.tradeName}`, M + half + 16, y + 8.8)
+  doc.text(`Representante: ${NUAGE_COMPANY.representative}`, M + half + 16, y + 12.8)
+
+  y += 26
+  y = ensure(doc, y, 28)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK)
+  doc.text('TESTEMUNHAS:', M, y)
+  y += 10
+  doc.setDrawColor(...INK); doc.setLineWidth(0.25)
+  doc.line(M, y, M + half, y); doc.line(M + half + 16, y, W - M, y)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTED)
+  doc.text('1. Nome: _________________________________', M, y + 4.5)
+  doc.text('CPF: ___________________________________', M, y + 9.5)
+  doc.text('2. Nome: _________________________________', M + half + 16, y + 4.5)
+  doc.text('CPF: ___________________________________', M + half + 16, y + 9.5)
 
   footer(doc, `Contrato · ${d.client.name}`)
-  doc.save(`contrato-${safeName(d.client.name)}.pdf`)
+  const suffix = templates.length === 1 ? `-${templates[0]}` : '-unificado'
+  doc.save(`contrato-${safeName(d.client.name)}${suffix}.pdf`)
 }
 
 // ======================================================================

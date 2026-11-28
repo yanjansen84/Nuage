@@ -1,10 +1,11 @@
-import { Check, X } from 'lucide-react'
+import { Check, Download, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
 import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { Priority, Project, Task } from '../data/types'
 import { useAuth } from '../lib/auth'
+import { downloadCsv } from '../lib/csv'
 import { Comments } from '../components/Comments'
 import { Kanban } from '../components/Kanban'
 import { useFeedback } from '../ui/Feedback'
@@ -115,6 +116,17 @@ function TaskList() {
         {can('clientes') && <Select value={cli} onChange={(e) => setCli(e.target.value)} placeholder="Todos os clientes" options={(clients.data ?? []).map((c) => ({ value: c.id, label: c.name }))} aria-label="Cliente" />}
         <Select value={proj} onChange={(e) => setProj(e.target.value)} placeholder="Todos os projetos" options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.name }))} aria-label="Projeto" />
         <span className="spacer" />
+        {L.length > 0 && (
+          <button className="btn" onClick={() => downloadCsv(
+            `tarefas-${today()}.csv`,
+            ['Título', 'Status', 'Prioridade', 'Responsável', 'Cliente', 'Projeto', 'Início', 'Prazo', 'Esforço (h)', 'Concluída em'],
+            L.map((t) => [
+              t.title, status.byId(t.status_id)?.label, PRIORITY[t.priority].label,
+              people.name(t.owner_id), cname(t.client_id), pname(t.project_id),
+              t.start_date, t.due_date, t.effort_hours, t.done_at ? t.done_at.slice(0, 10) : '',
+            ]),
+          )}><Download aria-hidden />Exportar CSV</button>
+        )}
         {can('projetos', 'write') && <button className="btn primary" onClick={() => setEditing('new')}>Nova tarefa</button>}
       </div>
       {tasks.isLoading ? <Loading /> : mode === 'list' ? (
@@ -241,7 +253,7 @@ export function TaskForm({ task, defaultProject, parent, onClose, onOpen }: {
           <Field label="Esforço estimado (horas)" hint="Usado no cálculo de carga da equipe"><input type="text" inputMode="decimal" value={f.effort_hours} onChange={(e) => setF({ ...f, effort_hours: maskDecimal(e.target.value) })} placeholder="Ex.: 4" /></Field>
           <Field label="Início"><input type="date" value={f.start_date} onChange={set('start_date')} /></Field>
           <Field label="Prazo"><input type="date" value={f.due_date} onChange={set('due_date')} /></Field>
-          <Field label="Repetir" hint="A geração automática das próximas ocorrências entra na Fase 2">
+          <Field label="Repetir" hint="Ao concluir a tarefa, a próxima ocorrência é criada automaticamente">
             <Select value={f.recurrence} onChange={set('recurrence')} placeholder="Não repete" options={[{ value: 'daily', label: 'Diariamente' }, { value: 'weekly', label: 'Semanalmente' }, { value: 'monthly', label: 'Mensalmente' }]} />
           </Field>
         </div>

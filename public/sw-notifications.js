@@ -1,6 +1,23 @@
 // Carregado pelo service worker do PWA (workbox importScripts).
-// Clique no alerta do sistema: volta para a janela do Na.Nu já aberta (ou abre uma)
-// direto na tela do assunto. Só aceita caminhos internos do próprio app.
+// 1. push: exibe notificação recebida em segundo plano (Web Push).
+// 2. notificationclick: volta para a janela do Na.Nu já aberta (ou abre uma)
+//    direto na tela do assunto. Só aceita caminhos internos do próprio app.
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try { payload = event.data ? event.data.json() : {} } catch { payload = { title: event.data?.text() } }
+  const title = payload.title || 'Na.Nu'
+  const link = typeof payload.link === 'string' && /^\/([^/]|$)/.test(payload.link) ? payload.link : '/'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || undefined,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: payload.tag || undefined,
+      data: { link },
+    }),
+  )
+})
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const link = (event.notification.data && event.notification.data.link) || '/'

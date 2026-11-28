@@ -4,12 +4,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
 import { usePeople, useRun, useTable } from '../data/hooks'
-import type { BillingType, Contract, ContractItem } from '../data/types'
+import type { BillingType, Contract, ContractItem, ContractTemplateKey } from '../data/types'
 import { useAuth } from '../lib/auth'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { addDays, addMonths, Empty, Field, fdFull, Loading, maskDay, maskInteger, maskMoney, money, nn, num, parseMoney, PageHead, Select, Tag, today } from '../ui/kit'
-import { CONTRACT_STATUS, contractMonthly, contractOneTime, minEnd, PAY_METHOD } from './contratosUtil'
+import { CONTRACT_STATUS, CONTRACT_TEMPLATES, contractMonthly, contractOneTime, inferTemplatesFromServices, minEnd, PAY_METHOD } from './contratosUtil'
 
 export default function Contratos() {
   const { can } = useAuth()
@@ -88,11 +88,17 @@ export function ContratoEditor() {
   const admin = can('configuracoes', 'write')
   const [fixing, setFixing] = useState(false)
   const itemsEditable = (draft && canWrite && can('financeiro', 'write')) || (fixing && admin)
+  // fora do rascunho, condições comerciais exigem permissão financeira (ou modo correção do admin)
+  const termsLocked = !draft && !fixing && !can('financeiro', 'write') && !admin
 
   const [f, setF] = useState({
-    client_id: sp.get('cliente') ?? '', start_date: '', min_months: '', renewal: 'automatica', notice_days: '15',
+    client_id: sp.get('cliente') ?? '', start_date: '', min_months: '', renewal: 'automatica', notice_days: '30',
     due_day: '10', payment_method: 'pix', installments: '1', payment_terms: '', notes: '',
+    templates: ['agencia'] as ContractTemplateKey[], platforms: '', publisher: 'contratada',
+    video_quantity: '', shooting_location: '', first_payment_date: '', billing_periodicity: 'Mensal',
+    portfolio_authorized: true, forum_city: 'São Luís - MA',
   })
+  const [templatesTouched, setTemplatesTouched] = useState(!isNew)
   const [items, setItems] = useState<DraftItem[]>([])
   const [loaded, setLoaded] = useState(isNew)
   const [activating, setActivating] = useState(false)
@@ -101,14 +107,23 @@ export function ContratoEditor() {
   // carrega o contrato existente no formulário
   useEffect(() => {
     if (isNew || loaded || !k || (finance && !savedItems.data)) return
+    const loadedItems = (savedItems.data ?? []).map((i) => ({ ...i, key: i.id }))
+    const fallbackTemplates = k.templates?.length
+      ? k.templates
+      : inferTemplatesFromServices(loadedItems.map((i) => ({ name: services.data?.find((s) => s.id === i.service_id)?.name })))
     setF({
       client_id: k.client_id, start_date: k.start_date ?? '', min_months: k.min_months?.toString() ?? '', renewal: k.renewal,
-      notice_days: k.notice_days?.toString() ?? '', due_day: k.due_day?.toString() ?? '', payment_method: k.payment_method ?? '',
+      notice_days: k.notice_days?.toString() ?? '30', due_day: k.due_day?.toString() ?? '', payment_method: k.payment_method ?? '',
       installments: k.installments?.toString() ?? '1', payment_terms: k.payment_terms ?? '', notes: k.notes ?? '',
+      templates: fallbackTemplates, platforms: k.platforms ?? '', publisher: k.publisher ?? 'contratada',
+      video_quantity: k.video_quantity?.toString() ?? '', shooting_location: k.shooting_location ?? '',
+      first_payment_date: k.first_payment_date ?? '', billing_periodicity: k.billing_periodicity ?? '',
+      portfolio_authorized: k.portfolio_authorized ?? true, forum_city: k.forum_city || 'São Luís - MA',
     })
-    setItems((savedItems.data ?? []).map((i) => ({ ...i, key: i.id })))
+    setTemplatesTouched(true)
+    setItems(loadedItems)
     setLoaded(true)
-  }, [isNew, loaded, k, finance, savedItems.data])
+  }, [isNew, loaded, k, finance, savedItems.data, services.data])
 
   const priceOf = (offerId: string | null) => prices.data?.find((p) => p.offer_id === offerId)?.price ?? null
 
@@ -120,18 +135,49 @@ export function ContratoEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, presetService, offers.data, services.data, prices.data])
 
+  function suggestFromItems(nextItems: DraftItem[], cur: typeof f) {
+    const svcList = nextItems.map((i) => services.data?.find((x) => x.id === i.service_id)).filter(Boolean)
+    const suggested = templatesTouched ? cur.templates : inferTemplatesFromServices(svcList.map((s) => ({ name: s?.name })))
+    const hasRec = nextItems.some((i) => i.billing_type === 'recorrente')
+    const hasOne = nextItems.some((i) => i.billing_type !== 'recorrente')
+    const period = hasRec && hasOne ? 'Mensal + Pacote/Avulso' : hasRec ? 'Mensal' : hasOne ? 'Pacote / Avulso' : cur.billing_periodicity
+    let vidQty = cur.video_quantity
+    if (!vidQty && suggested.includes('studio')) {
+      for (const it of nextItems) {
+        const lbl = offers.data?.find((o) => o.id === it.offer_id)?.label ?? ''
+        const m = lbl.match(/(\d+)\s*v[ií]deo/i)
+        if (m) { vidQty = String(Number(m[1]) * it.quantity); break }
+      }
+    }
+    return { ...cur, templates: suggested, billing_periodicity: cur.billing_periodicity || period, video_quantity: vidQty }
+  }
+
   function addItem(serviceId: string) {
     const s = services.data?.find((x) => x.id === serviceId)
     if (!s) return
     const o = offers.data?.find((x) => x.service_id === s.id && x.active)
     const lp = priceOf(o?.id ?? null)
-    setItems((list) => [...list, {
+    const nextItems = [...items, {
       key: crypto.randomUUID?.() ?? String(Math.random()), service_id: s.id, offer_id: o?.id ?? null, description: null, quantity: 1,
       list_price: lp, negotiated_price: lp ?? 0, billing_type: s.billing_type,
-    }])
-    if (!f.min_months && s.min_months) setF((x) => ({ ...x, min_months: String(s.min_months) }))
+    }]
+    setItems(nextItems)
+    setF((x) => {
+      const next = suggestFromItems(nextItems, x)
+      return !next.min_months && s.min_months ? { ...next, min_months: String(s.min_months) } : next
+    })
   }
   const updItem = (key: string, patch: Partial<DraftItem>) => setItems((l) => l.map((i) => (i.key === key ? { ...i, ...patch } : i)))
+
+  function toggleTemplate(key: ContractTemplateKey) {
+    if (termsLocked) return
+    setTemplatesTouched(true)
+    setF((prev) => {
+      const has = prev.templates.includes(key)
+      if (has && prev.templates.length === 1) return prev
+      return { ...prev, templates: has ? prev.templates.filter((t) => t !== key) : [...prev.templates, key] }
+    })
+  }
 
   const monthly = useMemo(() => contractMonthly(items), [items])
   const oneTime = useMemo(() => contractOneTime(items), [items])
@@ -144,6 +190,15 @@ export function ContratoEditor() {
       min_months: num(f.min_months), renewal: f.renewal as Contract['renewal'], notice_days: num(f.notice_days),
       due_day: num(f.due_day), payment_method: (f.payment_method || null) as Contract['payment_method'],
       installments: num(f.installments), payment_terms: nn(f.payment_terms), notes: nn(f.notes),
+      templates: f.templates,
+      platforms: f.templates.includes('agencia') || f.templates.includes('social_media') ? nn(f.platforms) : null,
+      publisher: (f.templates.includes('social_media') ? (f.publisher || 'contratada') : null) as Contract['publisher'],
+      video_quantity: f.templates.includes('studio') ? num(f.video_quantity) : null,
+      shooting_location: f.templates.includes('studio') ? nn(f.shooting_location) : null,
+      first_payment_date: f.first_payment_date || null,
+      billing_periodicity: nn(f.billing_periodicity),
+      portfolio_authorized: f.portfolio_authorized,
+      forum_city: f.forum_city.trim() || 'São Luís - MA',
     }
     const r = await run(async () => {
       const cid = isNew ? (await db.insert('contracts', header)).id : (await db.update('contracts', { id: k!.id }, header), k!.id)
@@ -178,15 +233,17 @@ export function ContratoEditor() {
     if (await run(() => db.remove('contracts', { id: k.id }), 'Contrato excluído')) navigate('/contratos')
   }
 
-  async function generatePdf() {
+  async function generatePdf(onlyTemplate?: ContractTemplateKey) {
     const c = clients.data?.find((x) => x.id === f.client_id)
     if (!c) return
+    const selectedTemplates = onlyTemplate ? [onlyTemplate] : (f.templates.length ? f.templates : (['agencia'] as ContractTemplateKey[]))
     setPdfBusy(true)
     try {
       const billingLabel = { recorrente: 'Mensal', pacote: 'Pacote', avulso: 'Avulso' } as const
       await contractPdf({
         client: c,
         status: k ? CONTRACT_STATUS[k.status].label : 'Rascunho',
+        templates: selectedTemplates,
         items: items.map((i) => {
           const s = services.data?.find((x) => x.id === i.service_id)
           return {
@@ -201,6 +258,14 @@ export function ContratoEditor() {
           renewal: f.renewal === 'automatica' ? 'Automática' : 'Manual', noticeDays: num(f.notice_days), dueDay: num(f.due_day),
           paymentMethod: f.payment_method ? PAY_METHOD[f.payment_method] : null, installments: num(f.installments),
           paymentTerms: nn(f.payment_terms), notes: nn(f.notes),
+          firstPaymentDate: f.first_payment_date || null,
+          billingPeriodicity: nn(f.billing_periodicity),
+          platforms: nn(f.platforms),
+          publisher: selectedTemplates.includes('social_media') ? ((f.publisher || 'contratada') as 'contratada' | 'contratante') : null,
+          videoQuantity: selectedTemplates.includes('studio') ? num(f.video_quantity) : null,
+          shootingLocation: selectedTemplates.includes('studio') ? nn(f.shooting_location) : null,
+          portfolioAuthorized: f.portfolio_authorized,
+          forumCity: f.forum_city.trim() || 'São Luís - MA',
         },
       })
     } catch {
@@ -222,9 +287,9 @@ export function ContratoEditor() {
         sub={<><Tag color={st.color}>{st.label}</Tag>{k?.activated_at && <span className="mu"> · ativado em {fdFull(k.activated_at)}</span>}</>}
         actions={<>
           {finance && (
-            <button className="btn" onClick={generatePdf} disabled={!f.client_id || !items.length || pdfBusy}
-              title={!items.length ? 'Adicione ao menos um serviço' : 'Baixar PDF para enviar ao cliente'}>
-              <FileDown aria-hidden />{pdfBusy ? 'Gerando…' : 'Gerar PDF'}
+            <button className="btn" onClick={() => generatePdf()} disabled={!f.client_id || !items.length || pdfBusy}
+              title={!items.length ? 'Adicione ao menos um serviço' : 'Baixar PDF completo para assinatura do cliente'}>
+              <FileDown aria-hidden />{pdfBusy ? 'Gerando…' : f.templates.length > 1 ? 'Gerar PDF (unificado)' : 'Gerar PDF'}
             </button>
           )}
           {!draft && admin && !fixing && <button className="btn" onClick={() => setFixing(true)} title="Corrigir dados de um contrato já firmado"><Wrench aria-hidden />Corrigir contrato</button>}
@@ -303,21 +368,93 @@ export function ContratoEditor() {
 
           <div className="panel">
             <h3>Condições</h3>
-            <Field label="Cliente *">
+            <Field label="Cliente *" hint={client && (!client.document || !client.address)
+              ? <>Falta CPF/CNPJ ou endereço para a qualificação jurídica — <Link to={`/clientes/${client.id}`}>completar cadastro</Link></>
+              : undefined}>
               <Select value={f.client_id} onChange={set('client_id')} placeholder="Selecione" disabled={!isNew && !fixing}
                 options={(clients.data ?? []).map((c) => ({ value: c.id, label: c.name }))} />
             </Field>
+
+            <Field label="Modelo(s) de cláusulas no PDF" hint={f.templates.length > 1
+              ? 'Mais de um modelo selecionado: o botão principal gera o contrato unificado, ou baixe por modelo abaixo.'
+              : 'Sugerido automaticamente pelos serviços contratados'}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {CONTRACT_TEMPLATES.map((tpl) => {
+                  const active = f.templates.includes(tpl.key)
+                  return (
+                    <button key={tpl.key} type="button" disabled={termsLocked}
+                      className={`btn sm ${active ? 'primary' : ''}`}
+                      aria-pressed={active} title={tpl.hint}
+                      onClick={() => toggleTemplate(tpl.key)}>
+                      {tpl.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {finance && f.templates.length > 1 && items.length > 0 && f.client_id && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  {f.templates.map((tk) => {
+                    const label = CONTRACT_TEMPLATES.find((t) => t.key === tk)?.label ?? tk
+                    return (
+                      <button key={tk} type="button" className="btn ghost sm" disabled={pdfBusy}
+                        onClick={() => generatePdf(tk)}>
+                        <FileDown aria-hidden />Só {label}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </Field>
+
+            {(f.templates.includes('agencia') || f.templates.includes('social_media')) && (
+              <div className="form-grid">
+                <Field label="Plataformas contratadas">
+                  <input value={f.platforms} onChange={set('platforms')} disabled={termsLocked} placeholder="Ex.: Instagram, TikTok, Meta Ads" />
+                </Field>
+                {f.templates.includes('social_media') && (
+                  <Field label="Responsável pela publicação (2.13)">
+                    <Select value={f.publisher} onChange={set('publisher')} disabled={termsLocked}
+                      options={[
+                        { value: 'contratada', label: 'CONTRATADA (Nuage)' },
+                        { value: 'contratante', label: 'CONTRATANTE (Cliente)' },
+                      ]} />
+                  </Field>
+                )}
+              </div>
+            )}
+
+            {f.templates.includes('studio') && (
+              <div className="form-grid">
+                <Field label="Quantidade de vídeos (Studio)">
+                  <input type="text" inputMode="numeric" value={f.video_quantity} disabled={termsLocked}
+                    onChange={(e) => setF({ ...f, video_quantity: maskInteger(e.target.value) })} placeholder="Ex.: 5" />
+                </Field>
+                <Field label="Local de captação">
+                  <input value={f.shooting_location} onChange={set('shooting_location')} disabled={termsLocked} placeholder="Ex.: Estúdio Nuage / Sede do cliente" />
+                </Field>
+              </div>
+            )}
+
             <div className="form-grid">
-              <Field label="Início"><input type="date" value={f.start_date} onChange={set('start_date')} /></Field>
-              <Field label="Prazo mínimo (meses)"><input type="text" inputMode="numeric" value={f.min_months} onChange={(e) => setF({ ...f, min_months: maskInteger(e.target.value) })} placeholder="Ex.: 6" /></Field>
-              <Field label="Renovação"><Select value={f.renewal} onChange={set('renewal')} options={[{ value: 'automatica', label: 'Automática' }, { value: 'manual', label: 'Manual' }]} /></Field>
-              <Field label="Aviso prévio"><Select value={f.notice_days} onChange={set('notice_days')} placeholder="A definir" options={[5, 10, 15, 20].map((d) => ({ value: String(d), label: `${d} dias` }))} /></Field>
-              <Field label="Dia de vencimento"><input type="text" inputMode="numeric" value={f.due_day} onChange={(e) => setF({ ...f, due_day: maskDay(e.target.value) })} placeholder="Ex.: 10" /></Field>
-              <Field label="Pagamento"><Select value={f.payment_method} onChange={set('payment_method')} placeholder="A definir" options={Object.entries(PAY_METHOD).map(([v, l]) => ({ value: v, label: l }))} /></Field>
-              <Field label="Parcelas"><input type="text" inputMode="numeric" value={f.installments} onChange={(e) => setF({ ...f, installments: maskInteger(e.target.value) })} placeholder="1" /></Field>
+              <Field label="Início"><input type="date" value={f.start_date} onChange={set('start_date')} disabled={termsLocked} /></Field>
+              <Field label="Prazo mínimo (meses)"><input type="text" inputMode="numeric" value={f.min_months} onChange={(e) => setF({ ...f, min_months: maskInteger(e.target.value) })} placeholder="Ex.: 6" disabled={termsLocked} /></Field>
+              <Field label="Renovação"><Select value={f.renewal} onChange={set('renewal')} disabled={termsLocked} options={[{ value: 'automatica', label: 'Automática' }, { value: 'manual', label: 'Manual' }]} /></Field>
+              <Field label="Aviso prévio"><Select value={f.notice_days} onChange={set('notice_days')} disabled={termsLocked} placeholder="A definir" options={[5, 10, 15, 20, 30].map((d) => ({ value: String(d), label: `${d} dias` }))} /></Field>
+              <Field label="Dia de vencimento"><input type="text" inputMode="numeric" value={f.due_day} onChange={(e) => setF({ ...f, due_day: maskDay(e.target.value) })} placeholder="Ex.: 10" disabled={termsLocked} /></Field>
+              <Field label="Pagamento"><Select value={f.payment_method} onChange={set('payment_method')} disabled={termsLocked} placeholder="A definir" options={Object.entries(PAY_METHOD).map(([v, l]) => ({ value: v, label: l }))} /></Field>
+              <Field label="Parcelas"><input type="text" inputMode="numeric" value={f.installments} onChange={(e) => setF({ ...f, installments: maskInteger(e.target.value) })} placeholder="1" disabled={termsLocked} /></Field>
+              <Field label="Data do 1º pagamento"><input type="date" value={f.first_payment_date} onChange={set('first_payment_date')} disabled={termsLocked} /></Field>
+              <Field label="Periodicidade"><input value={f.billing_periodicity} onChange={set('billing_periodicity')} disabled={termsLocked} placeholder="Ex.: Mensal, Pacote único" /></Field>
+              <Field label="Uso em portfólio Nuage">
+                <Select value={f.portfolio_authorized ? 'sim' : 'nao'} disabled={termsLocked}
+                  onChange={(e) => setF({ ...f, portfolio_authorized: e.target.value === 'sim' })}
+                  options={[{ value: 'sim', label: 'AUTORIZO' }, { value: 'nao', label: 'NÃO AUTORIZO' }]} />
+              </Field>
+              <Field label="Foro (Cidade / UF)"><input value={f.forum_city} onChange={set('forum_city')} disabled={termsLocked} placeholder="São Luís - MA" /></Field>
             </div>
             {end && <p className="money-note">Prazo mínimo até {fdFull(end)}{f.renewal === 'automatica' ? ', renova automaticamente se não houver pedido de encerramento' : ''}.</p>}
-            <Field label="Condições de pagamento"><input value={f.payment_terms} onChange={set('payment_terms')} placeholder="Ex.: parcelamento via Pix em 2x" /></Field>
+            <Field label="Condições de pagamento"><input value={f.payment_terms} onChange={set('payment_terms')} placeholder="Ex.: parcelamento via Pix em 2x" disabled={termsLocked} /></Field>
+            {termsLocked && <p className="money-note">Contrato firmado: apenas quem tem permissão financeira (ou o administrador) altera as condições comerciais e jurídicas. Observações continuam editáveis.</p>}
             <Field label="Observações"><textarea value={f.notes} onChange={set('notes')} placeholder="Combinados e observações do contrato" /></Field>
           </div>
         </div>

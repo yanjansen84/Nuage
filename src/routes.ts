@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Briefcase, CalendarDays, Clapperboard, Contact, FileText, House, KanbanSquare, Settings, Users, Wallet } from 'lucide-react'
+import { Briefcase, CalendarDays, Clapperboard, Compass, Contact, FileText, House, KanbanSquare, Settings, Users, Wallet } from 'lucide-react'
 import type { ModuleKey } from './lib/types'
 
 type Action = 'read' | 'write' | 'delete'
@@ -40,6 +40,7 @@ export const NAV: NavItem[] = [
   { path: '/contratos', label: 'Contratos', icon: FileText, module: 'contratos', section: 'Relacionamento' },
   { path: '/projetos', label: 'Projetos', icon: KanbanSquare, module: 'projetos', section: 'Operação' },
   { path: '/conteudo', label: 'Conteúdo', icon: Clapperboard, module: 'producao', section: 'Operação' },
+  { path: '/estrategia', label: 'Estratégia', icon: Compass, module: 'estrategia', section: 'Operação' },
   { path: '/financeiro', label: 'Financeiro', icon: Wallet, module: 'financeiro', section: 'Gestão' },
   // administradores também entram, para criar usuários mesmo sem o módulo Equipe
   { path: '/equipe', label: 'Equipe', icon: Contact, module: 'equipe', or: 'configuracoes', orAction: 'write', section: 'Gestão' },

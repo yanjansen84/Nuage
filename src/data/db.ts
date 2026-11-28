@@ -1,7 +1,7 @@
 // Camada de dados única. As páginas usam só `db`; por trás, ou é o Supabase
 // (com RLS no banco) ou o modo demonstração (memória, imitando a RLS).
 import { isDemo, supabase } from '../lib/supabase'
-import type { ClientService, Table, Tables } from './types'
+import type { ClientService, PublicApprovalInfo, Table, Tables } from './types'
 import { demoDb } from './demoDb'
 
 export type Match<T extends Table> = Partial<Tables[T]>
@@ -28,6 +28,8 @@ export interface Db {
   markAllNotificationsRead(): Promise<void>
   /** Avisa quando chega/muda uma notificação do usuário (tempo real). Retorna a função que cancela. */
   subscribeNotifications(userId: string, onChange: (n: Tables['notifications'] | null) => void): () => void
+  getContentForApproval(token: string): Promise<PublicApprovalInfo | null>
+  submitContentApproval(input: { token: string; decision: 'aprovado' | 'ajustes'; reviewer_name: string; comment?: string | null }): Promise<void>
   currentUserId(): string | null
 }
 
@@ -37,6 +39,8 @@ export function traduzErro(m: string): string {
   if (/row-level security|permission denied|42501/i.test(m)) return 'Você não tem permissão para esta ação.'
   if (/violates foreign key/i.test(m)) return 'Este registro está em uso por outro cadastro e não pode ser removido.'
   if (/duplicate key/i.test(m)) return 'Já existe um registro com esses dados.'
+  if (/check constraint/i.test(m)) return 'Dados inválidos para salvar. Verifique os campos preenchidos.'
+  if (/does not exist|schema cache|PGRST205|42P01/i.test(m)) return 'Recurso ainda não disponível no banco. Confira se todas as migrações do Supabase foram aplicadas.'
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Tente de novo.'
   return m
 }
@@ -119,6 +123,18 @@ const supabaseDb: Db = {
         (p) => onChange(p.eventType === 'INSERT' ? (p.new as Tables['notifications']) : null))
       .subscribe()
     return () => { void supabase.removeChannel(ch) }
+  },
+  async getContentForApproval(token) {
+    const { data, error } = await supabase.rpc('get_content_for_approval', { p_token: token })
+    fail(error)
+    const rows = (data ?? []) as PublicApprovalInfo[]
+    return rows[0] ?? null
+  },
+  async submitContentApproval({ token, decision, reviewer_name, comment }) {
+    const { error } = await supabase.rpc('submit_content_approval', {
+      p_token: token, p_decision: decision, p_reviewer_name: reviewer_name, p_comment: comment ?? null,
+    })
+    fail(error)
   },
   currentUserId: () => uid,
 }

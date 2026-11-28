@@ -1,4 +1,4 @@
-import { Check, ExternalLink, Pencil } from 'lucide-react'
+import { Check, Copy, ExternalLink, Link2, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { db } from '../data/db'
 import { useOpenFromUrl, useOptions, usePeople, useRun, useTable } from '../data/hooks'
@@ -129,6 +129,9 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
   const formats = useOptions('content_format')
   const { status, posted, next, beforePosted } = useContentFlow()
   const history = useTable('content_history', { match: { content_id: content?.id ?? '' }, order: { column: 'at' }, enabled: !!content })
+  const approvalLinks = useTable('content_approval_links', { match: { content_id: content?.id ?? '' }, order: { column: 'created_at', ascending: false }, enabled: !!content })
+  const approvals = useTable('content_approvals', { match: { content_id: content?.id ?? '' }, order: { column: 'created_at', ascending: false }, enabled: !!content })
+  const { toast } = useFeedback()
   const me = db.currentUserId() ?? profile?.id ?? ''
   const own = scope('producao') === 'own'
   const canEdit = can('producao', 'write')
@@ -168,6 +171,22 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
     if (await run(() => db.remove('contents', { id: content.id }), 'Conteúdo excluído')) onClose()
   }
   const links = (f.links || '').split('\n').map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l))
+  const nowIso = new Date().toISOString()
+  const activeLink = (approvalLinks.data ?? []).find((l) => !l.revoked_at && l.expires_at > nowIso && !(approvals.data ?? []).some((a) => a.link_id === l.id))
+  const activeUrl = activeLink ? `${window.location.origin}/aprovar/${activeLink.token}` : null
+
+  async function copyLink(url: string) {
+    try { await navigator.clipboard.writeText(url); toast('Link copiado') }
+    catch { toast('Copie o link exibido no campo', true) }
+  }
+  async function createApprovalLink() {
+    if (!content) return
+    const res = await run(() => db.insert('content_approval_links', { content_id: content.id }), 'Link de aprovação gerado')
+    if (res && res !== true) void copyLink(`${window.location.origin}/aprovar/${res.token}`)
+  }
+  async function revokeApprovalLink(linkId: string) {
+    await run(() => db.update('content_approval_links', { id: linkId }, { revoked_at: new Date().toISOString() }), 'Link revogado')
+  }
 
   return (
     <Modal open onClose={onClose} size="lg" title={!content ? 'Novo conteúdo' : editing ? 'Editar conteúdo' : 'Conteúdo'}
@@ -211,6 +230,29 @@ export function ContentForm({ content, date, defaultClient, onClose }: { content
       </fieldset>
       {links.length > 0 && (
         <div className="link-list">{links.map((l) => <a key={l} href={l} target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden />{l.replace(/^https?:\/\//, '').slice(0, 60)}</a>)}</div>
+      )}
+      {content && (
+        <fieldset className="box">
+          <legend>Aprovação externa (link para o cliente)</legend>
+          {activeUrl ? (
+            <div className="toolbar" style={{ margin: 0 }}>
+              <input readOnly value={activeUrl} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1, minWidth: 200 }} aria-label="Link de aprovação" />
+              <button type="button" className="btn" onClick={() => copyLink(activeUrl)}><Copy aria-hidden />Copiar</button>
+              {canEdit && <button type="button" className="btn danger" onClick={() => revokeApprovalLink(activeLink!.id)}><Trash2 aria-hidden />Revogar</button>}
+            </div>
+          ) : canEdit ? (
+            <button type="button" className="btn" onClick={createApprovalLink}><Link2 aria-hidden />Gerar link de aprovação</button>
+          ) : <p className="mu" style={{ margin: 0 }}>Nenhum link de aprovação ativo</p>}
+          {(approvals.data ?? []).length > 0 && (
+            <div className="hist" style={{ marginTop: 12 }}>
+              {approvals.data!.map((a) => (
+                <span key={a.id}>
+                  {fdt(a.created_at)} · <b>{a.decision === 'aprovado' ? 'Aprovado' : 'Ajustes solicitados'}</b> por {a.reviewer_name}{a.comment ? ` — "${a.comment}"` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </fieldset>
       )}
       {content && (history.data?.length ?? 0) > 0 && (
         <div className="hist">

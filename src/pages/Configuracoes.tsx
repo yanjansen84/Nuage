@@ -1,18 +1,20 @@
-import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Download, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { db } from '../data/db'
 import { useOptions, usePeople, useRun, useTable } from '../data/hooks'
 import type { BillingType, OptionRow, RolePermission, RoleRow, Service, ServiceOffer } from '../data/types'
 import { useAuth } from '../lib/auth'
+import { downloadCsv } from '../lib/csv'
 import { useFeedback } from '../ui/Feedback'
 import { Modal } from '../ui/Modal'
 import { Empty, Field, fdt, Loading, maskInteger, maskMoney, money, nn, num, parseMoney, PageHead, Select, Tabs } from '../ui/kit'
 import { Pagination } from '../ui/Pagination'
+import ManualSistema from '../components/ManualSistema'
 import { useQuery } from '@tanstack/react-query'
 import type { Table } from '../data/types'
 
-type Aba = 'permissoes' | 'servicos' | 'etapas' | 'checklists' | 'auditoria'
+type Aba = 'permissoes' | 'servicos' | 'etapas' | 'checklists' | 'auditoria' | 'manual'
 
 export default function Configuracoes() {
   const { can } = useAuth()
@@ -32,12 +34,14 @@ export default function Configuracoes() {
         { key: 'etapas', label: 'Etapas e status', hidden: !seeConfig },
         { key: 'checklists', label: 'Checklists', hidden: !seeConfig },
         { key: 'auditoria', label: 'Auditoria', hidden: !admin },
+        { key: 'manual', label: 'Manual do sistema', hidden: !seeConfig },
       ]} />
       {aba === 'permissoes' && admin && <Permissoes />}
       {aba === 'servicos' && seeConfig && <Servicos />}
       {aba === 'etapas' && seeConfig && <Etapas />}
       {aba === 'checklists' && seeConfig && <Checklists />}
       {aba === 'auditoria' && admin && <Auditoria />}
+      {aba === 'manual' && seeConfig && <ManualSistema />}
     </>
   )
 }
@@ -107,7 +111,7 @@ function RoleMatrix() {
               const locked = role === 'ceo' && m.key === 'configuracoes'
               return (
                 <tr key={m.key}>
-                  <td><b>{m.name}</b>{m.key === 'estrategia' && <span className="mu"> · Fase 2</span>}</td>
+                  <td><b>{m.name}</b></td>
                   <td><Select value={p.scope} disabled={locked} onChange={(e) => change(m.key, { scope: e.target.value as RolePermission['scope'] })} options={SCOPES} aria-label={`Leitura em ${m.name}`} /></td>
                   <td><input type="checkbox" checked={p.can_write} disabled={locked || p.scope === 'none'} onChange={(e) => change(m.key, { can_write: e.target.checked })} aria-label={`Criar e editar em ${m.name}`} /></td>
                   <td><input type="checkbox" checked={p.can_delete} disabled={locked || p.scope === 'none'} onChange={(e) => change(m.key, { can_delete: e.target.checked })} aria-label={`Excluir em ${m.name}`} /></td>
@@ -345,6 +349,7 @@ const SETS: { key: string; label: string; final?: string }[] = [
   { key: 'task_status', label: 'Status de tarefa', final: 'Conclui a tarefa' },
   { key: 'content_status', label: 'Status de conteúdo', final: 'Marca como postado' },
   { key: 'content_format', label: 'Formatos de conteúdo' },
+  { key: 'campaign_status', label: 'Status de campanha', final: 'Encerra a campanha' },
   { key: 'bill_category', label: 'Categorias de contas a pagar' },
 ]
 
@@ -485,9 +490,12 @@ function Checklists() {
 const TABLE_LABEL: Record<string, string> = {
   profiles: 'Usuário', profile_details: 'Contatos', role_permissions: 'Permissão de cargo', user_permissions: 'Permissão pessoal',
   options: 'Cadastro', services: 'Serviço', service_offers: 'Opção de serviço', offer_prices: 'Preço', checklist_templates: 'Checklist',
-  checklist_template_items: 'Item de checklist', clients: 'Cliente', leads: 'Lead', lead_values: 'Valor de lead', contracts: 'Contrato',
+  checklist_template_items: 'Item de checklist', clients: 'Cliente', client_briefings: 'Briefing de cliente',
+  campaigns: 'Campanha', campaign_budgets: 'Verba de campanha', strategies: 'Estratégia',
+  leads: 'Lead', lead_values: 'Valor de lead', contracts: 'Contrato',
   contract_items: 'Item de contrato', payments: 'Pagamento', bills: 'Conta a pagar', projects: 'Projeto', project_members: 'Equipe do projeto', tasks: 'Tarefa',
   task_dependencies: 'Dependência', events: 'Agenda', roles: 'Cargo', contents: 'Conteúdo',
+  content_approval_links: 'Link de aprovação', content_approvals: 'Aprovação de conteúdo',
 }
 const ACTION: Record<string, string> = { insert: 'criou', update: 'alterou', delete: 'excluiu' }
 
@@ -516,6 +524,16 @@ function Auditoria() {
         <span className="spacer" />
         <Select value={kind} onChange={(e) => { setKind(e.target.value); setPage(1) }} placeholder="Todos os registros" aria-label="Tipo de registro"
           options={kinds.map(([v, l]) => ({ value: v, label: l }))} />
+        {rows.length > 0 && (
+          <button className="btn" onClick={() => downloadCsv(
+            `auditoria-p${page}.csv`,
+            ['Quando', 'Quem', 'Ação', 'Tipo', 'Registro'],
+            rows.map((a) => [
+              a.at, people.name(a.actor) || 'Sistema', ACTION[a.action] ?? a.action,
+              TABLE_LABEL[a.table_name] ?? a.table_name, desc(a.new_data) || desc(a.old_data),
+            ]),
+          )}><Download aria-hidden />Exportar CSV</button>
+        )}
       </div>
       {q.isLoading ? <Loading /> : !rows.length ? <Empty>Nenhuma alteração registrada{kind ? ' para esse tipo' : ''}</Empty> : (
         <>

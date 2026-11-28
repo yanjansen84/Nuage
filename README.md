@@ -33,13 +33,10 @@ supabase/
 
 ### 1. Supabase
 
-1. **SQL Editor** → rode, nesta ordem, o conteúdo de:
-   - `supabase/migrations/20261119000000_fundacao.sql`
-   - `supabase/migrations/20261119000100_dados_iniciais.sql`
-   - `supabase/migrations/20261119000200_cargos_editaveis.sql`
-   - `supabase/migrations/20261119000300_conteudos.sql`
+1. **SQL Editor** → rode o script consolidado `supabase/schema_completo.sql`
+   (ou aplique, em ordem alfabética, todos os arquivos de `supabase/migrations/`, da `20261119000000_fundacao.sql` até a mais recente).
 
-   (ou, com a CLI: `npx supabase link --project-ref <ref>` e `npx supabase db push`)
+   (alternativa com a CLI: `npx supabase link --project-ref <ref>` e `npx supabase db push`)
 2. **Authentication → Sign In / Providers**: desative *Allow new users to sign up*
    (só entra quem for cadastrado por um administrador).
 3. **Authentication → URL Configuration**: em *Site URL* coloque a URL da Vercel e, em
@@ -73,21 +70,33 @@ npm run dev
 
 > Nunca coloque a chave `service_role` no front nem na Vercel. Ela só existe dentro das funções do Supabase.
 
-## Roadmap da Fase 1
+## Roadmap
 
 - [x] Fundação: schema, RLS, auditoria, catálogo, login, menu por permissão
-- [x] Início: indicadores, saúde financeira, pendências, entregas da semana, carga da equipe
+- [x] Início e Agenda: indicadores, saúde financeira, pendências, entregas da semana, carga da equipe, calendário unificado
 - [x] Comercial (CRM): funil kanban/lista, valor estimado protegido, conversão em cliente
-- [x] Clientes: cartões e página central (visão geral, contratos, projetos, comentários)
-- [x] Contratos: itens do catálogo com preço negociado, condições, ativação (gera onboarding)
-- [x] Financeiro: contratado / recebido / previsto separados, vencimentos, atrasos, fim de prazo
-- [x] Projetos e tarefas: lista e kanban, checklist, subtarefas, colaboradores, dependências, comentários
+- [x] Clientes: cartões e página central (visão geral, briefing, estratégia, contratos, projetos, produções, campanhas, reuniões e comentários)
+- [x] Contratos: itens do catálogo com preço negociado, condições, ativação (gera onboarding), PDF e correção pelo administrador
+- [x] Financeiro: contratado / recebido / previsto separados, vencimentos, atrasos, fim de prazo, extrato PDF e **Contas a pagar**
+- [x] Projetos e tarefas: lista e kanban, checklist, subtarefas, colaboradores, dependências, recorrência automática e comentários
+- [x] Conteúdo: calendário editorial (kanban, lista e mês), histórico de etapas, comentários e **aprovação externa por link**
+- [x] Estratégia: posicionamento, personas, pilares, metas e KPIs com escopo `own`/`all`
+- [x] Notificações: triggers no banco, sino em tempo real, lembretes do dia (incluindo fim de contrato) e suporte a PWA / Web Push
+- [x] Produtividade: busca global (`Ctrl+K`) e exportação CSV com proteção de fórmulas
 - [x] Equipe: crachás, contatos protegidos, carga x capacidade
 - [x] Configurações: usuários (criação com senha provisória), permissões por cargo e por pessoa, serviços e preços,
       etapas e status, checklists de onboarding, auditoria
 
-Fica para a Fase 2 (especificação seção 12): produção de conteúdo e aprovação por link, estratégia,
-notificações automáticas, tarefas recorrentes automáticas, busca global, exportação CSV.
+### Web Push em segundo plano (opcional)
+
+Para receber alertas mesmo com o navegador/PWA fechado:
+1. Gere um par de chaves VAPID e defina `VITE_VAPID_PUBLIC_KEY` no front (`.env.local` / Vercel).
+2. Configure os secrets e publique a função `send-push` no Supabase:
+   ```
+   npx supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:contato@sua-agencia.com --project-ref <ref>
+   npx supabase functions deploy send-push --project-ref <ref>
+   ```
+3. Crie um **Database Webhook** no Supabase para `INSERT` em `public.notifications` apontando para `send-push` com o cabeçalho `Authorization: Bearer <SERVICE_ROLE_KEY>` (ou `x-webhook-secret` usando `PUSH_WEBHOOK_SECRET`).
 
 ## Modo demonstração
 

@@ -2,11 +2,11 @@
 // Supabase para que "Ver como" mostre exatamente o que cada cargo veria.
 import { DEMO_USER_ID, demoSeed } from '../lib/demo'
 import type { Db, Match } from './db'
-import type { ClientService, Table, Tables } from './types'
+import type { ClientService, PublicApprovalInfo, Table, Tables } from './types'
 
 type Store = { [K in Table]: Tables[K][] }
 type AnyRow = Record<string, unknown>
-const KEY = 'nanu.demo.db.v8'
+const KEY = 'nanu.demo.db.v9'
 
 let store: Store = load()
 function load(): Store {
@@ -54,6 +54,7 @@ const projectMine = (pid: unknown) => {
 const taskMine = (t: AnyRow) => t.owner_id === me() || t.created_by === me()
   || rows('task_collaborators').some((c) => c.task_id === t.id && c.profile_id === me())
 const contentMine = (c: AnyRow) => c.owner_id === me() || c.reviewer_id === me() || c.created_by === me()
+const strategyMine = (s: AnyRow) => s.owner_id === me() || s.created_by === me()
 const visible = (table: Table, id: unknown) => rows(table).some((r) => r.id === id && canRead(table, r))
 
 function canRead(t: Table, r: AnyRow): boolean {
@@ -61,21 +62,23 @@ function canRead(t: Table, r: AnyRow): boolean {
     case 'profile_details': return r.id === me() || read('equipe')
     case 'user_permissions': return r.user_id === me() || admin()
     case 'audit_log': return admin()
-    case 'notifications': return r.user_id === me()
+    case 'notifications': case 'push_subscriptions': return r.user_id === me()
     case 'offer_prices': case 'payments': case 'bills': return read('financeiro')
     case 'lead_values': return read('financeiro') && read('crm')
     case 'contracts': return read('contratos')
     case 'contract_items': return read('contratos') && read('financeiro')
-    case 'clients': return read('clientes')
+    case 'clients': case 'client_briefings': case 'campaigns': return read('clientes')
+    case 'campaign_budgets': return read('financeiro') && read('clientes')
+    case 'strategies': return readAll('estrategia') || (read('estrategia') && strategyMine(r))
     case 'leads': return readAll('crm') || (read('crm') && (r.owner_id === me() || r.created_by === me()))
     case 'projects': return readAll('projetos') || (read('projetos') && projectMine(r.id))
     case 'project_members': case 'task_collaborators': case 'task_dependencies': return read('projetos')
     case 'tasks': return readAll('projetos') || (read('projetos') && taskMine(r))
     case 'contents': return readAll('producao') || (read('producao') && contentMine(r))
-    case 'content_history': return visible('contents', r.content_id)
+    case 'content_history': case 'content_approval_links': case 'content_approvals': return visible('contents', r.content_id)
     case 'task_checklist': return visible('tasks', r.task_id)
     case 'comments': {
-      const map = { task: 'tasks', project: 'projects', lead: 'leads', client: 'clients', content: 'contents' } as const
+      const map = { task: 'tasks', project: 'projects', lead: 'leads', client: 'clients', content: 'contents', strategy: 'strategies' } as const
       return visible(map[r.entity as keyof typeof map], r.entity_id)
     }
     default: return true
@@ -88,14 +91,20 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
     case 'profiles': return op === 'update' && (r.id === me() || admin())
     case 'profile_details': return op === 'update' && (r.id === me() || writeAll('equipe'))
     case 'roles': return admin() && !(op === 'delete' && r.key === 'ceo')
-    case 'modules': case 'audit_log': return false
+    case 'modules': case 'audit_log': case 'content_approvals': return false
     // como no banco: a pessoa só marca como lida e dispensa as próprias; quem cria é o sistema
     case 'notifications': return op !== 'insert' && r.user_id === me()
+    case 'push_subscriptions': return r.user_id === me()
     case 'role_permissions': case 'user_permissions': return admin()
     case 'options': case 'services': case 'service_offers': case 'checklist_templates': case 'checklist_template_items':
       return writeAll('configuracoes')
     case 'offer_prices': return write('financeiro') && read('configuracoes')
-    case 'clients': return op === 'delete' ? del('clientes') : write('clientes')
+    case 'clients': case 'client_briefings': case 'campaigns': return op === 'delete' ? del('clientes') : write('clientes')
+    case 'campaign_budgets': return write('financeiro') && write('clientes')
+    case 'strategies':
+      if (op === 'insert') return writeAll('estrategia') || (write('estrategia') && (r.owner_id ?? me()) === me())
+      if (op === 'delete') return del('estrategia') && (readAll('estrategia') || r.created_by === me())
+      return writeAll('estrategia') || (write('estrategia') && strategyMine(r))
     case 'leads':
       if (op === 'delete') return del('crm')
       if (op === 'insert') return write('crm')
@@ -126,36 +135,82 @@ function canWrite(t: Table, r: AnyRow, op: Op): boolean {
       if (op === 'insert') return writeAll('producao') || (write('producao') && (r.owner_id ?? me()) === me())
       if (op === 'delete') return del('producao') && (readAll('producao') || r.created_by === me())
       return writeAll('producao') || (write('producao') && contentMine(r))
+    case 'content_approval_links':
+      return (op === 'delete' ? del('producao') : write('producao')) && visible('contents', r.content_id)
     default: return false
   }
 }
 
 // ---------- regras que no banco são triggers ----------
 const HAS_ID: Table[] = ['profiles', 'profile_details', 'options', 'services', 'service_offers', 'checklist_templates',
-  'checklist_template_items', 'clients', 'leads', 'contracts', 'contract_items', 'payments', 'bills', 'projects', 'tasks', 'task_checklist', 'comments', 'events', 'contents', 'notifications']
+  'checklist_template_items', 'clients', 'campaigns', 'strategies', 'leads', 'contracts', 'contract_items', 'payments',
+  'bills', 'projects', 'tasks', 'task_checklist', 'comments', 'events', 'contents', 'content_approval_links',
+  'content_approvals', 'notifications', 'push_subscriptions']
 
 function defaults(t: Table, r: AnyRow): AnyRow {
   const out: AnyRow = { ...r }
   if (HAS_ID.includes(t) && !out.id) out.id = uuid()
-  if (['clients', 'leads', 'contracts', 'projects', 'tasks', 'events', 'contents', 'bills'].includes(t) && out.created_by === undefined) out.created_by = me()
-  if (['clients', 'leads', 'contracts', 'tasks', 'comments', 'events', 'contents', 'bills'].includes(t) && !out.created_at) out.created_at = new Date().toISOString()
+  if (['clients', 'campaigns', 'strategies', 'leads', 'contracts', 'projects', 'tasks', 'events', 'contents', 'bills', 'content_approval_links'].includes(t) && out.created_by === undefined) out.created_by = me()
+  if (['clients', 'campaigns', 'strategies', 'leads', 'contracts', 'tasks', 'comments', 'events', 'contents', 'bills', 'content_approval_links', 'content_approvals', 'push_subscriptions'].includes(t) && !out.created_at) out.created_at = new Date().toISOString()
+  if (t === 'client_briefings') { out.updated_by ??= me(); out.updated_at = new Date().toISOString() }
+  if (t === 'push_subscriptions' && !out.user_id) out.user_id = me()
+  if (t === 'strategies') { out.status ??= 'rascunho'; out.pillars ??= [] }
+  if (t === 'content_approval_links') {
+    out.token ??= (uuid() + uuid()).replace(/-/g, '')
+    out.expires_at ??= new Date(Date.now() + 14 * 86400_000).toISOString()
+    out.revoked_at ??= null
+  }
   if (t === 'comments' && !out.author_id) out.author_id = me()
   if (t === 'comments' && out.resolved === undefined) out.resolved = false
-  if (t === 'tasks') { out.priority ??= 'media'; out.parent_id ??= null; out.done_at ??= null }
+  if (t === 'tasks') { out.priority ??= 'media'; out.parent_id ??= null; out.done_at ??= null; out.recurrence_source_id ??= null }
   if (t === 'projects') out.priority ??= 'media'
   if (t === 'bills') { out.status ??= 'aberto'; out.paid_at ??= null }
-  if (t === 'contracts') { out.status ??= 'rascunho'; out.renewal ??= 'automatica' }
+  if (t === 'contracts') {
+    out.status ??= 'rascunho'; out.renewal ??= 'automatica'; out.templates ??= ['agencia']
+    out.portfolio_authorized ??= true; out.forum_city ??= 'São Luís - MA'
+  }
   if (t === 'payments') out.status ??= 'previsto'
   if (t === 'options') { out.active ??= true; out.is_final ??= false }
   if (t === 'services' || t === 'service_offers') { out.active ??= true; if (t === 'services') out.deliverables ??= [] }
   if (t === 'task_checklist') out.done ??= false
   return out
 }
-function syncTaskDone(r: AnyRow) {
+function shiftDate(isoDate: string, freq: string) {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const dt = new Date(y, m - 1, d, 12)
+  if (freq === 'daily') dt.setDate(dt.getDate() + 1)
+  else if (freq === 'weekly') dt.setDate(dt.getDate() + 7)
+  else dt.setMonth(dt.getMonth() + 1)
+  return dt.toLocaleDateString('sv-SE')
+}
+
+function generateNextRecurringTask(t: AnyRow) {
+  const rec = t.recurrence as { freq?: string } | null
+  if (!t.done_at || t.parent_id || !rec?.freq) return
+  if (rows('tasks').some((x) => x.recurrence_source_id === t.id)) return
+  const openStatus = rows('options').filter((o) => o.set_key === 'task_status' && !o.is_final && o.active)
+    .sort((a, b) => Number(a.sort) - Number(b.sort))[0]?.id ?? null
+  const nextId = uuid()
+  const nextTask = defaults('tasks', {
+    id: nextId, project_id: t.project_id, client_id: t.client_id, title: t.title, description: t.description,
+    owner_id: t.owner_id, status_id: openStatus, priority: t.priority,
+    start_date: t.start_date ? shiftDate(String(t.start_date), rec.freq) : today(),
+    due_date: t.due_date ? shiftDate(String(t.due_date), rec.freq) : null,
+    effort_hours: t.effort_hours, recurrence: t.recurrence, recurrence_source_id: t.id,
+  })
+  rows('tasks').push(nextTask)
+  for (const c of rows('task_collaborators').filter((x) => x.task_id === t.id))
+    rows('task_collaborators').push({ task_id: nextId, profile_id: c.profile_id })
+  for (const chk of rows('task_checklist').filter((x) => x.task_id === t.id))
+    rows('task_checklist').push({ id: uuid(), task_id: nextId, title: chk.title, done: false, sort: chk.sort })
+}
+
+function syncTaskDone(r: AnyRow, wasDone?: boolean) {
   if (!('status_id' in r)) return
   const fin = rows('options').find((o) => o.id === r.status_id)?.is_final
   if (fin && !r.done_at) r.done_at = new Date().toISOString()
   if (!fin) r.done_at = null
+  if (!wasDone && r.done_at) generateNextRecurringTask(r)
 }
 function syncContent(r: AnyRow) {
   if (!('status_id' in r)) return
@@ -232,7 +287,7 @@ export const demoDb: Db = {
       if (table === 'profiles') guardProfile(r, patch as AnyRow)
       const before = clone(r)
       Object.assign(r, patch)
-      if (table === 'tasks') syncTaskDone(r)
+      if (table === 'tasks') syncTaskDone(r, Boolean(before.done_at))
       if (table === 'contents' && 'status_id' in (patch as AnyRow)) { syncContent(r); if (before.status_id !== r.status_id) logContent(r, before.status_id) }
       audit(table, 'update', before, r)
     }
@@ -335,6 +390,52 @@ export const demoDb: Db = {
   },
   // sem servidor no demo: não há tempo real
   subscribeNotifications: () => () => {},
+  async getContentForApproval(token) {
+    await delay()
+    const nowIso = new Date().toISOString()
+    const link = rows('content_approval_links').find((l) => l.token === token.trim() && !l.revoked_at && String(l.expires_at) > nowIso)
+    if (!link) return null
+    const c = rows('contents').find((x) => x.id === link.content_id)
+    if (!c) return null
+    const cl = rows('clients').find((x) => x.id === c.client_id)
+    const fmt = rows('options').find((x) => x.id === c.format_id)
+    const st = rows('options').find((x) => x.id === c.status_id)
+    const apr = rows('content_approvals').find((a) => a.link_id === link.id)
+    return {
+      content_id: String(c.id), title: String(c.title), client_name: (cl?.name as string) ?? null,
+      format_label: (fmt?.label as string) ?? null, status_label: (st?.label as string) ?? null, status_color: (st?.color as string) ?? null,
+      channel: (c.channel as string) ?? null, objective: (c.objective as string) ?? null, caption: (c.caption as string) ?? null,
+      links: (c.links as string) ?? null, publish_date: (c.publish_date as string) ?? null, publish_time: (c.publish_time as string) ?? null,
+      expires_at: String(link.expires_at), decision: (apr?.decision as PublicApprovalInfo['decision']) ?? null,
+      reviewer_name: (apr?.reviewer_name as string) ?? null, feedback: (apr?.comment as string) ?? null,
+      decided_at: (apr?.created_at as string) ?? null,
+    }
+  },
+  async submitContentApproval({ token, decision, reviewer_name, comment }) {
+    await delay()
+    const name = reviewer_name.trim()
+    const body = comment?.trim() || null
+    if (!name) throw new Error('Informe seu nome')
+    if (decision === 'ajustes' && !body) throw new Error('Descreva os ajustes desejados')
+    const nowIso = new Date().toISOString()
+    const link = rows('content_approval_links').find((l) => l.token === token.trim() && !l.revoked_at && String(l.expires_at) > nowIso)
+    if (!link) throw new Error('Link de aprovação inválido ou expirado')
+    if (rows('content_approvals').some((a) => a.link_id === link.id)) throw new Error('Este link de aprovação já foi respondido')
+    const c = rows('contents').find((x) => x.id === link.content_id)
+    if (!c) throw new Error('Conteúdo não encontrado')
+    rows('content_approvals').push(defaults('content_approvals', {
+      link_id: link.id, content_id: c.id, decision, reviewer_name: name, comment: body,
+    }))
+    const targetLabel = decision === 'aprovado' ? 'Aprovado' : 'Ajustes'
+    const st = rows('options').find((o) => o.set_key === 'content_status' && o.label === targetLabel)
+    if (st && st.id !== c.status_id) {
+      const prev = c.status_id
+      c.status_id = st.id
+      syncContent(c)
+      logContent(c, prev)
+    }
+    persist()
+  },
   currentUserId: () => DEMO_USER_ID,
 }
 

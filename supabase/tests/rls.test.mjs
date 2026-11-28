@@ -218,14 +218,14 @@ await as(U.ceo, async () => {
   await q(`select activate_contract($1, $2)`, [kId, U.des])
   ok((await q(`select status from contracts where id=$1`, [kId])).rows[0].status === 'ativo', 'PoC 2: contrato ativado corretamente via activate_contract')
 
-  await q(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 500, 'pago')`, [kId])
+  await q(`insert into payments (contract_id, due_date, amount, status, paid_at) values ($1, current_date, 500, 'pago', current_date)`, [kId])
 
   let err = null
   try { await q(`update contracts set status='rascunho' where id=$1`, [kId]) } catch (e) { err = e.message }
   ok(!!err, 'PoC 2: contrato ativo não pode ser revertido para rascunho')
 
   const kDraftWithPay = (await q(`insert into contracts (client_id, status) values ($1, 'rascunho') returning id`, [cId])).rows[0].id
-  await q(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 500, 'pago')`, [kDraftWithPay])
+  await q(`insert into payments (contract_id, due_date, amount, status, paid_at) values ($1, current_date, 500, 'pago', current_date)`, [kDraftWithPay])
 
   err = null
   try { await q(`delete from contracts where id=$1`, [kDraftWithPay]) } catch (e) { err = e.message }
@@ -454,4 +454,150 @@ await as(U.ceo, async () => {
   ok(await as(U.ceo, () => tenta(`update contracts set client_id=$1 where id=$2`, [outroCli, ativo])) === 1, 'Correção: admin corrige o cliente de contrato firmado')
   ok(String(await as(U.ceo, () => tenta(`update contracts set activated_at=now() - interval '2 days' where id=$1`, [ativo]))).startsWith('ERRO'), 'Correção: nem o admin altera a data de ativação')
   ok(await count(`select count(*) n from audit_log where table_name='contract_items' and action='update' and record_id='${item}'`) >= 1, 'Correção: a correção fica registrada na auditoria')
+}
+
+// ---------- Integridade de pagamentos e lembrete de fim de contrato ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  await as(U.fin, async () => {
+    ok(!!await tenta(`insert into payments (contract_id, due_date, amount, status) values ($1, current_date, 100, 'pago')`, [ativo]), 'Pagamentos: status pago exige paid_at')
+    ok(!!await tenta(`insert into payments (contract_id, due_date, amount, status, paid_at) values ($1, current_date, 100, 'previsto', current_date)`, [ativo]), 'Pagamentos: previsto não aceita paid_at')
+  })
+  await as(U.ceo, async () => {
+    await q(`update contracts set start_date = (current_date - interval '5 months 20 days')::date, min_months = 6, notice_days = 15 where id = $1`, [ativo])
+  })
+  await as(U.ven, async () => {
+    await q(`select generate_my_notifications()`)
+    const list = (await q(`select kind, link from notifications where kind = 'contract_ending'`)).rows
+    ok(list.some((x) => x.link === `/contratos/${ativo}`), 'Notificações: quem lê Contratos recebe lembrete de fim do prazo mínimo')
+  })
+  await as(U.des, async () => {
+    // designer recebeu apenas 'contratos' em PoC 2, sem 'financeiro'; confirma que recebe sem vazar valor
+    await q(`select generate_my_notifications()`)
+    const list = (await q(`select title, body from notifications where kind = 'contract_ending'`)).rows
+    ok(list.length >= 1 && !/R\$/.test(list[0].body ?? ''), 'Notificações: lembrete de contrato não expõe valores financeiros')
+  })
+}
+
+// ---------- Fase 2: Tarefas recorrentes ----------
+{
+  const doneSt = (await q(`select id from options where set_key='task_status' and is_final limit 1`)).rows[0].id
+  let recId
+  await as(U.ceo, async () => {
+    recId = (await q(`insert into tasks (title, owner_id, due_date, recurrence) values ('Relatório semanal', $1, current_date, '{"freq":"weekly"}') returning id`, [U.des])).rows[0].id
+    await q(`insert into task_collaborators (task_id, profile_id) values ($1, $2)`, [recId, U.ceo])
+    await q(`insert into task_checklist (task_id, title, done, sort) values ($1, 'Exportar métricas', true, 1)`, [recId])
+    await q(`update tasks set status_id = $1 where id = $2`, [doneSt, recId])
+    const next = (await q(`select id, due_date::text, done_at, recurrence_source_id from tasks where recurrence_source_id = $1`, [recId])).rows
+    ok(next.length === 1 && next[0].done_at === null, 'Recorrência: concluir tarefa semanal cria a próxima ocorrência aberta')
+    ok(await count(`select count(*) n from task_collaborators where task_id='${next[0].id}'`) === 1, 'Recorrência: copia colaboradores')
+    ok(await count(`select count(*) n from task_checklist where task_id='${next[0].id}' and done=false`) === 1, 'Recorrência: copia checklist desmarcado')
+    // reabrir e concluir de novo não duplica
+    const openSt = (await q(`select id from options where set_key='task_status' and not is_final limit 1`)).rows[0].id
+    await q(`update tasks set status_id = $1 where id = $2`, [openSt, recId])
+    await q(`update tasks set status_id = $1 where id = $2`, [doneSt, recId])
+    ok(await count(`select count(*) n from tasks where recurrence_source_id='${recId}'`) === 1, 'Recorrência: não duplica ao reabrir e concluir novamente')
+  })
+}
+
+// ---------- Fase 2: Briefing, Campanhas e Estratégia ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  const cli = (await q(`select id from clients limit 1`)).rows[0].id
+  let campId, stratCeo, stratDes
+  await as(U.ceo, async () => {
+    await q(`insert into client_briefings (client_id, audience, tone_of_voice) values ($1, 'Público A', 'Direto')`, [cli])
+    campId = (await q(`insert into campaigns (client_id, name, channel) values ($1, 'Campanha Verão', 'Meta Ads') returning id`, [cli])).rows[0].id
+    await q(`insert into campaign_budgets (campaign_id, monthly_budget, spent_amount) values ($1, 3000, 1200)`, [campId])
+    stratCeo = (await q(`insert into strategies (client_id, title, owner_id, pillars) values ($1, 'Estratégia Q1', $2, array['Autoridade']) returning id`, [cli, U.ceo])).rows[0].id
+  })
+  await as(U.des, async () => {
+    ok(await count(`select count(*) n from client_briefings`) === 1, 'Briefing: quem lê Clientes lê briefing')
+    ok(await count(`select count(*) n from campaigns`) === 1, 'Campanhas: quem lê Clientes vê campanhas')
+    ok(await count(`select count(*) n from campaign_budgets`) === 0, 'Campanhas: sem Financeiro NÃO lê verba')
+    ok(!!await tenta(`insert into campaign_budgets (campaign_id, monthly_budget) values ($1, 500)`, [campId]), 'Campanhas: sem Financeiro não grava verba')
+    ok(await count(`select count(*) n from strategies`) === 0, 'Estratégia: sem acesso não vê estratégias')
+  })
+  await as(U.fin, async () => {
+    ok(await count(`select count(*) n from campaign_budgets`) === 1, 'Campanhas: Financeiro + Clientes lê verba')
+  })
+  // libera Estratégia com escopo own para designer e valida isolamento
+  await as(U.ceo, async () => {
+    await q(`update role_permissions set scope='own', can_write=true where role='designer' and module='estrategia'`)
+  })
+  await as(U.des, async () => {
+    ok(await count(`select count(*) n from strategies where id='${stratCeo}'`) === 0, 'Estratégia: escopo own não lê estratégia alheia')
+    stratDes = (await q(`insert into strategies (client_id, title, owner_id) values ($1, 'Estratégia Designer', $2) returning id`, [cli, U.des])).rows[0].id
+    ok(await count(`select count(*) n from strategies`) === 1, 'Estratégia: escopo own vê apenas a própria')
+    await q(`insert into comments (entity, entity_id, body) values ('strategy', $1, 'Revisar pilares')`, [stratDes])
+    ok(await count(`select count(*) n from comments where entity='strategy'`) === 1, 'Estratégia: comentários funcionam na estratégia')
+  })
+}
+
+// ---------- Fase 2: Aprovação pública por link ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  let contentId, token
+  await as(U.ceo, async () => {
+    const st = (await q(`select id from options where set_key='content_status' and label='Aguardando aprovação'`)).rows[0].id
+    contentId = (await q(`insert into contents (title, status_id, owner_id, reviewer_id, briefing) values ('Post aprovação externa', $1, $2, $3, 'Briefing interno confidencial') returning id`, [st, U.des, U.ceo])).rows[0].id
+    token = (await q(`insert into content_approval_links (content_id) values ($1) returning token`, [contentId])).rows[0].token
+  })
+  await as(null, async () => {
+    ok(!!await tenta(`select * from contents`), 'Aprovação pública: anon continua bloqueado em SELECT direto de contents')
+    ok(!!await tenta(`select * from content_approval_links`), 'Aprovação pública: anon não lista links de aprovação')
+    const info = (await q(`select * from get_content_for_approval($1)`, [token])).rows
+    ok(info.length === 1 && info[0].title === 'Post aprovação externa' && !('briefing' in info[0]), 'Aprovação pública: RPC lê apenas dados seguros do conteúdo')
+    ok(!!await tenta(`select submit_content_approval($1, 'ajustes', 'Cliente X', '')`, [token]), 'Aprovação pública: pedir ajustes exige comentário')
+    await q(`select submit_content_approval($1, 'ajustes', 'Maria Cliente', 'Trocar a cor do título')`, [token])
+    ok(!!await tenta(`select submit_content_approval($1, 'aprovado', 'Maria Cliente', null)`, [token]), 'Aprovação pública: mesmo link não aceita segunda resposta')
+  })
+  await as(U.des, async () => {
+    const c = (await q(`select o.label from contents c join options o on o.id=c.status_id where c.id=$1`, [contentId])).rows[0]
+    ok(c.label === 'Ajustes', 'Aprovação pública: resposta do cliente move status do conteúdo para Ajustes')
+    ok(await count(`select count(*) n from notifications where kind='content_changes' and link='/conteudo?conteudo=${contentId}'`) === 1, 'Aprovação pública: responsável é notificado da resposta')
+  })
+}
+
+// ---------- Fase 2: Web Push subscriptions ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  await as(U.des, async () => {
+    await q(`insert into push_subscriptions (endpoint, p256dh, auth) values ('https://push.exemplo/1', 'k1', 'a1')`)
+  })
+  await as(U.fin, async () => {
+    ok(await count(`select count(*) n from push_subscriptions`) === 0, 'Push: usuário não vê inscrição de outro usuário')
+  })
+  await as(null, async () => {
+    ok(!!await tenta(`select * from push_subscriptions`), 'Push: anon não acessa push_subscriptions')
+  })
+}
+
+// ---------- Contrato jurídico & dados legais do cliente ----------
+{
+  const tenta = async (sql, params) => { try { await q(sql, params); return null } catch (e) { return e.message } }
+  const cli = (await q(`select id from clients limit 1`)).rows[0].id
+  let cid
+  await as(U.ceo, async () => {
+    await q(`update clients set legal_name = 'Empresa Alpha Ltda', document = '12.345.678/0001-90', address = 'Av. Principal, 100, São Luís - MA', legal_rep_name = 'Maria Alpha', legal_rep_cpf = '111.222.333-44' where id = $1`, [cli])
+    const cliRow = (await q(`select legal_name, document from clients where id = $1`, [cli])).rows[0]
+    ok(cliRow.legal_name === 'Empresa Alpha Ltda' && cliRow.document === '12.345.678/0001-90', 'Cliente: grava razão social e CPF/CNPJ')
+
+    ok(!!await tenta(`insert into contracts (client_id, publisher) values ($1, 'outro')`, [cli]), 'Contrato: publisher aceita apenas contratada ou contratante')
+    ok(!!await tenta(`insert into contracts (client_id, templates) values ($1, array['invalido'])`, [cli]), 'Contrato: templates valida modelos permitidos')
+
+    cid = (await q(
+      `insert into contracts (client_id, notice_days, templates, platforms, publisher, video_quantity, shooting_location, portfolio_authorized, forum_city)
+       values ($1, 30, array['social_media','studio'], 'Instagram', 'contratada', 5, 'Estúdio Nuage', false, 'São Luís - MA')
+       returning id`,
+      [cli],
+    )).rows[0].id
+    const row = (await q(`select notice_days, forum_city, portfolio_authorized from contracts where id = $1`, [cid])).rows[0]
+    ok(row.notice_days === 30 && row.forum_city === 'São Luís - MA' && row.portfolio_authorized === false, 'Contrato: grava notice_days=30, templates e campos jurídicos')
+  })
+  // vendedor pode ler contratos, mas sem Financeiro não altera termos jurídicos de contrato já ativo
+  await as(U.des, async () => {
+    ok(String(await tenta(`update contracts set forum_city = 'Imperatriz - MA' where id = $1`, [ativo])).includes('Financeiro'),
+      'Contrato firmado: quem não tem Financeiro não altera dados jurídicos/foro')
+  })
 }

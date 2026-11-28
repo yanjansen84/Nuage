@@ -1,5 +1,23 @@
-import type { Contract, ContractItem, ContractStatus, Payment } from '../data/types'
+import type { Contract, ContractItem, ContractStatus, ContractTemplateKey, Payment } from '../data/types'
 import { addMonths, today } from '../ui/kit'
+
+export const CONTRACT_TEMPLATES: { key: ContractTemplateKey; label: string; hint: string }[] = [
+  { key: 'agencia', label: 'Agência Nuage', hint: 'Comunicação completa e gestão de tráfego pago' },
+  { key: 'social_media', label: 'Social Media', hint: 'Gestão de redes sociais e criação de conteúdo' },
+  { key: 'studio', label: 'Studio Nuage', hint: 'Produção audiovisual com pacotes de vídeos' },
+]
+
+/** Sugere automaticamente os modelos de contrato a partir dos nomes dos serviços escolhidos. */
+export function inferTemplatesFromServices(services: { name?: string | null }[]): ContractTemplateKey[] {
+  const out = new Set<ContractTemplateKey>()
+  for (const s of services) {
+    const n = (s.name ?? '').toLowerCase()
+    if (n.includes('agênc') || n.includes('agenc')) out.add('agencia')
+    else if (n.includes('social') || n.includes('rede')) out.add('social_media')
+    else if (n.includes('studio') || n.includes('áudio') || n.includes('audio') || n.includes('vídeo') || n.includes('video')) out.add('studio')
+  }
+  return out.size ? [...out] : ['agencia']
+}
 
 export const CONTRACT_STATUS: Record<ContractStatus, { label: string; color: string }> = {
   rascunho: { label: 'Rascunho', color: '#8e6bd8' },
